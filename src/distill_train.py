@@ -216,8 +216,12 @@ def main():
         args.outdir, "checkpoints",
         f"distill_{args.dataset}_{args.teacher_backbone}_to_{args.student_backbone}.pt"
     )
-
+    warmup_ep = 3
     for ep in range(1, args.epochs + 1):
+        # linear warmup for alpha
+        alpha_now = args.alpha * min(1.0, ep / warmup_ep)
+        distill_loss.alpha = alpha_now  # 런타임 갱신
+
         t0 = time.time()
         tr_loss = train_one_epoch(student, teacher, train_loader, distill_loss, optimizer, device, task)
         val_metrics = evaluate(student, val_loader, task, n_classes, device)
