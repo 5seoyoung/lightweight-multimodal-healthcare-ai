@@ -15,7 +15,7 @@ class BaselineCNN(nn.Module):
             global_pool='avg'
         )
 
-        # ⚠️ 일부 모델은 num_features 속성과 실제 출력 차원이 다름 (mobilenetv3_small_100 등)
+        # 일부 모델은 num_features 속성과 실제 출력 차원이 다름 (mobilenetv3_small_100 등)
         # 항상 더미 포워드로 안전하게 in_feats를 측정
         with torch.no_grad():
             self.encoder.eval()
