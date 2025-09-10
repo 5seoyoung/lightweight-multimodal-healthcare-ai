@@ -1,69 +1,76 @@
 # src/datasets/medmnist_loader.py
-from typing import Tuple
-import torch
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torchvision.transforms import InterpolationMode
 import medmnist
 from medmnist import INFO
+from torch.utils.data import DataLoader
+from torchvision import transforms
+
+def _build_transforms(img_size: int, augment: str = "none"):
+    """img_size에 맞춰 공통 전처리 + augment 옵션 적용"""
+    t = [
+        transforms.Resize((img_size, img_size)),
+        transforms.Grayscale(num_output_channels=3),  # MobileNet 등 3채널 모델 호환
+    ]
+
+    if augment in ("light", "heavy"):
+        if augment == "light":
+            aug = [
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomRotation(degrees=10),
+            ]
+        else:  # heavy
+            try:
+                from torchvision.transforms import RandAugment
+                aug = [RandAugment(num_ops=2, magnitude=7)]
+            except Exception:
+                aug = [
+                    transforms.RandomHorizontalFlip(p=0.5),
+                    transforms.RandomRotation(degrees=15),
+                    transforms.RandomResizedCrop((img_size, img_size), scale=(0.9, 1.0)),
+                ]
+        t.extend(aug)
+
+    t.extend([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    ])
+    return transforms.Compose(t)
+
 
 def get_medmnist_loaders(
-    name: str = "chestmnist",
-    batch_size: int = 128,
-    img_size: int = 224,
-    download: bool = True,
-    num_workers: int = 2,
-    augment: str = "none",  # ← "none" | "light"
-) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
-
-    name = name.lower()
-    assert name in INFO, f"{name} is not a valid MedMNIST dataset."
+    name: str,
+    batch_size: int,
+    img_size: int,
+    augment: str = "none",         # ✅ 추가된 인자
+    num_workers: int = 4,
+):
+    """MedMNIST 표준 train/val/test 로더와 메타데이터 반환"""
+    assert name in INFO, f"Unknown MedMNIST dataset: {name}"
     info = INFO[name]
     DataClass = getattr(medmnist, info["python_class"])
 
-    normalize = transforms.Normalize(mean=[0.5]*3, std=[0.5]*3)
+    # train에는 augment, val/test는 항상 eval transform
+    train_tf = _build_transforms(img_size, augment)
+    eval_tf  = _build_transforms(img_size, "none")
 
-    if augment == "light":
-        train_tfms = transforms.Compose([
-            transforms.Resize((img_size, img_size), interpolation=InterpolationMode.BILINEAR),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=5, interpolation=InterpolationMode.BILINEAR),
-            transforms.Grayscale(num_output_channels=3),
-            transforms.ToTensor(),
-            normalize,
-        ])
-    else:  # "none"
-        train_tfms = transforms.Compose([
-            transforms.Resize((img_size, img_size), interpolation=InterpolationMode.BILINEAR),
-            transforms.Grayscale(num_output_channels=3),
-            transforms.ToTensor(),
-            normalize,
-        ])
-
-    eval_tfms = transforms.Compose([
-        transforms.Resize((img_size, img_size), interpolation=InterpolationMode.BILINEAR),
-        transforms.Grayscale(num_output_channels=3),
-        transforms.ToTensor(),
-        normalize,
-    ])
-
-    train_ds = DataClass(split="train", transform=train_tfms, download=download)
-    val_ds   = DataClass(split="val",   transform=eval_tfms, download=download)
-    test_ds  = DataClass(split="test",  transform=eval_tfms, download=download)
-
-    # MPS(mac) 로더 옵션
-    use_mps = torch.backends.mps.is_available()
-    if use_mps:
-        nw = 0; pin = False; persistent = False
-    else:
-        nw = num_workers; pin = True; persistent = nw > 0
+    train_ds = DataClass(split="train", transform=train_tf, download=True)
+    val_ds   = DataClass(split="val",   transform=eval_tf,  download=True)
+    test_ds  = DataClass(split="test",  transform=eval_tf,  download=True)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=nw, pin_memory=pin, persistent_workers=persistent)
+                              num_workers=num_workers, pin_memory=True)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
-                              num_workers=nw, pin_memory=pin, persistent_workers=persistent)
+                              num_workers=num_workers, pin_memory=True)
     test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False,
-                              num_workers=nw, pin_memory=pin, persistent_workers=persistent)
+                              num_workers=num_workers, pin_memory=True)
 
-    meta = {"task": info["task"], "n_classes": len(info["label"]), "desc": info["description"], "name": name}
+    # 메타정보
+    # n_classes는 INFO에 있으면 사용, 없으면 라벨 모양에서 추정(멀티라벨 대응)
+    n_classes = info.get("n_classes", None)
+    if n_classes is None:
+        try:
+            n_classes = train_ds.labels.shape[1] if train_ds.labels.ndim > 1 else int(train_ds.labels.max()) + 1
+        except Exception:
+            n_classes = 1
+
+    meta = {"task": info["task"], "n_classes": int(n_classes)}
     return train_loader, val_loader, test_loader, meta

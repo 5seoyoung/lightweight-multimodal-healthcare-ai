@@ -5,45 +5,54 @@ import torch.nn.functional as F
 
 class DistillLoss(nn.Module):
     """
-    Unified distillation loss.
-    - task == "multi-label": hard BCEWithLogits + soft BCE(sigmoid/T, sigmoid/T)
-    - task in {"multi-class", "binary-class"}: hard CE + soft KLDiv(logsoftmax/T, softmax/T)
-    Soft term is scaled by T^2 (Hinton et al.).
+    task:
+      - "multi-label": BCEWithLogits hard loss + sigmoid-based soft KD
+      - "multi-class": CrossEntropy hard loss + KLDiv soft KD (softmax)
+      - "binary-class": CrossEntropy hard loss (+ KLDiv on 2-way softmax)
+    alpha: KD 가중치 (total = (1-alpha)*hard + alpha*soft)
+    tau:   temperature
+    pos_weight: (multi-label 전용) BCEWithLogits pos_weight
     """
-    def __init__(self, task: str, alpha: float = 0.2, tau: float = 4.0, pos_weight: torch.Tensor | None = None):
+    def __init__(self, task: str, alpha: float = 0.5, tau: float = 2.0, pos_weight=None):
         super().__init__()
         self.task = task
         self.alpha = alpha
         self.tau = tau
-        self.pos_weight = pos_weight
 
-        self.ce = nn.CrossEntropyLoss()
-        # BCEWithLogitsLoss는 생성 시 pos_weight를 줘야 반영됩니다.
-        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight) if pos_weight is not None else nn.BCEWithLogitsLoss()
-        self.kldiv = nn.KLDivLoss(reduction='batchmean')
+        if task == "multi-label":
+            self.hard_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="mean")
+        else:
+            self.hard_criterion = nn.CrossEntropyLoss()
 
-    def forward(self, student_logits: torch.Tensor, teacher_logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        T = self.tau
+        self.kldiv = nn.KLDivLoss(reduction="batchmean")
+
+    def forward(self, student_logits, teacher_logits, targets):
+        tau = self.tau
         a = self.alpha
 
         if self.task == "multi-label":
-            # hard: BCE with logits (optional pos_weight)
-            hard = self.bce(student_logits, targets.float())
+            # Hard loss
+            hard = self.hard_criterion(student_logits, targets.float())
+            # Soft KD: sigmoid with temperature (empirical; tau scaling 포함 X)
+            s = torch.sigmoid(student_logits / tau)
+            t = torch.sigmoid(teacher_logits / tau)
+            # BCE on softened probs (mean)
+            soft = F.binary_cross_entropy(s, t, reduction="mean")
+            loss = (1 - a) * hard + a * soft
+            return loss
 
-            # soft: BCE between softened sigmoid probabilities (teacher detached)
-            s_prob = torch.sigmoid(student_logits / T)
-            t_prob = torch.sigmoid(teacher_logits.detach() / T)
-            soft = F.binary_cross_entropy(s_prob, t_prob)
+        elif self.task == "multi-class":
+            # targets: [B] int
+            hard = self.hard_criterion(student_logits, targets.long())
+            # Soft KD: KL( log_softmax(s/t), softmax(t/t) ) * tau^2
+            s_log = F.log_softmax(student_logits / tau, dim=1)
+            t_prob = F.softmax(teacher_logits / tau, dim=1)
+            soft = self.kldiv(s_log, t_prob) * (tau ** 2)
+            return (1 - a) * hard + a * soft
 
-        else:
-            # multi-class or binary-class (2 logits)
-            # hard: CE on raw logits
-            hard = self.ce(student_logits, targets.long())
-
-            # soft: KLDiv between softened distributions
-            s_logprob = F.log_softmax(student_logits / T, dim=1)
-            t_prob    = F.softmax(teacher_logits.detach() / T, dim=1)
-            soft = self.kldiv(s_logprob, t_prob)
-
-        # Combine with T^2 scaling for soft term
-        return (1.0 - a) * hard + (a * (T ** 2) * soft)
+        else:  # "binary-class" as 2-way logits
+            hard = self.hard_criterion(student_logits, targets.long())
+            s_log = F.log_softmax(student_logits / tau, dim=1)
+            t_prob = F.softmax(teacher_logits / tau, dim=1)
+            soft = self.kldiv(s_log, t_prob) * (tau ** 2)
+            return (1 - a) * hard + a * soft
