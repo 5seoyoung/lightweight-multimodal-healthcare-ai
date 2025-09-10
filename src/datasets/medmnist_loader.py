@@ -1,4 +1,5 @@
-# src/datasets/medmnist_loader.py
+import os
+import torch
 import medmnist
 from medmnist import INFO
 from torch.utils.data import DataLoader
@@ -36,19 +37,22 @@ def _build_transforms(img_size: int, augment: str = "none"):
     return transforms.Compose(t)
 
 
-def get_medmnist_loaders(
-    name: str,
-    batch_size: int,
-    img_size: int,
-    augment: str = "none",         # ✅ 추가된 인자
-    num_workers: int = 4,
-):
-    """MedMNIST 표준 train/val/test 로더와 메타데이터 반환"""
-    assert name in INFO, f"Unknown MedMNIST dataset: {name}"
+def get_medmnist_loaders(name: str, batch_size: int, img_size: int,
+                         augment: str = "none", num_workers: int = None):
     info = INFO[name]
     DataClass = getattr(medmnist, info["python_class"])
 
-    # train에는 augment, val/test는 항상 eval transform
+    # num_workers 자동 설정(코어-1, 최소 2)
+    if num_workers is None:
+        ncpu = os.cpu_count() or 2
+        num_workers = max(2, ncpu - 1)
+
+    # CUDA에서만 pin_memory 사용 (MPS/CPU는 False로)
+    pin = torch.cuda.is_available()
+    common_kwargs = dict(num_workers=num_workers, pin_memory=pin)
+    if num_workers > 0:
+        common_kwargs.update(dict(persistent_workers=True, prefetch_factor=2))
+
     train_tf = _build_transforms(img_size, augment)
     eval_tf  = _build_transforms(img_size, "none")
 
@@ -56,21 +60,10 @@ def get_medmnist_loaders(
     val_ds   = DataClass(split="val",   transform=eval_tf,  download=True)
     test_ds  = DataClass(split="test",  transform=eval_tf,  download=True)
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True)
-    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
-                              num_workers=num_workers, pin_memory=True)
-    test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False,
-                              num_workers=num_workers, pin_memory=True)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  **common_kwargs)
+    val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, **common_kwargs)
+    test_loader  = DataLoader(test_ds,  batch_size=batch_size, shuffle=False, **common_kwargs)
 
-    # 메타정보
-    # n_classes는 INFO에 있으면 사용, 없으면 라벨 모양에서 추정(멀티라벨 대응)
-    n_classes = info.get("n_classes", None)
-    if n_classes is None:
-        try:
-            n_classes = train_ds.labels.shape[1] if train_ds.labels.ndim > 1 else int(train_ds.labels.max()) + 1
-        except Exception:
-            n_classes = 1
-
+    n_classes = info.get("n_classes", train_ds.labels.shape[1] if train_ds.labels.ndim > 1 else int(train_ds.labels.max())+1)
     meta = {"task": info["task"], "n_classes": int(n_classes)}
     return train_loader, val_loader, test_loader, meta
