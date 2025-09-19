@@ -1,5 +1,6 @@
 # src/train.py
-import argparse, os, json, time
+import argparse, os, json, time, random, platform
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
@@ -17,6 +18,25 @@ from utils.class_freq import estimate_pos_weight
 from utils.thresholds import optimal_thresholds
 
 
+# -------------------------
+# Reproducibility helpers
+# -------------------------
+def set_global_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def set_deterministic(flag: bool = True):
+    torch.backends.cudnn.deterministic = flag
+    torch.backends.cudnn.benchmark = not flag
+    # for CUDA reproducibility (has no effect on CPU/MPS, harmless otherwise)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
+
+
+# -------------------------
+# Metrics builders
+# -------------------------
 def build_metrics(task: str, n_classes: int, device):
     if task == "multi-label":
         auroc = MultilabelAUROC(num_labels=n_classes).to(device)
@@ -30,6 +50,9 @@ def build_metrics(task: str, n_classes: int, device):
     return auroc, auprc
 
 
+# -------------------------
+# Train / Eval loops
+# -------------------------
 def train_one_epoch(model, loader, criterion, optimizer, device, task):
     model.train()
     running = 0.0
@@ -47,6 +70,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device, task):
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         running += loss.item() * x.size(0)
     return running / len(loader.dataset)
@@ -135,7 +159,7 @@ def evaluate(model, loader, criterion, device, task, n_classes, thresholds=None,
     if task == "multi-label" and compute_thresholds and len(probs_buf) > 0:
         probs_all = torch.cat(probs_buf).numpy()
         targs_all = torch.cat(targs_buf).numpy()
-        ths = optimal_thresholds(probs_all, targs_all, steps=50)
+        ths = optimal_thresholds(probs_all, targs_all, steps=100)
         preds_opt = (probs_all >= ths[None, :]).astype(int)
         out["f1_macro_opt"] = float(f1_score(targs_all, preds_opt, average="macro", zero_division=0))
         out["thresholds"] = ths.tolist()
@@ -152,28 +176,44 @@ def evaluate(model, loader, criterion, device, task, n_classes, thresholds=None,
     return out, ths
 
 
+# -------------------------
+# Main
+# -------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", type=str, default="chestmnist")
-    ap.add_argument("--img_size", type=int, default=224)
-    ap.add_argument("--batch_size", type=int, default=128)
-    ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--img_size", type=int, default=128)
+    ap.add_argument("--batch_size", type=int, default=64)
+    ap.add_argument("--epochs", type=int, default=12)
     ap.add_argument("--lr", type=float, default=3e-4)
-    ap.add_argument("--backbone", type=str, default="resnet18")
+    ap.add_argument("--backbone", type=str, default="mobilenetv3_small_100")
     ap.add_argument("--pretrained", action="store_true")
     ap.add_argument("--outdir", type=str, default="results")
-    ap.add_argument("--aug", type=str, default="light", choices=["none", "light"])  # 증강 토글
-    ap.add_argument("--use_pos_weight", action="store_true")  # 멀티라벨 pos_weight 토글
-    ap.add_argument("--patience", type=int, default=3)  # Early stopping patience (AUROC 기준)
+    ap.add_argument("--aug", type=str, default="light", choices=["none", "light"])
+    ap.add_argument("--use_pos_weight", action="store_true")
+    ap.add_argument("--patience", type=int, default=3)  # Early stopping patience (AUPRC 기준)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--exp_name", type=str, default=None, help="결과 디렉토리 이름 override")
     args = ap.parse_args()
 
-    os.makedirs(args.outdir, exist_ok=True)
-    os.makedirs(os.path.join(args.outdir, "checkpoints"), exist_ok=True)
-    os.makedirs(os.path.join(args.outdir, "logs"), exist_ok=True)
-
+    # Device
     device = torch.device(
         "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     )
+
+    # Seed & determinism
+    set_global_seed(args.seed)
+    set_deterministic(True)
+
+    # Experiment id & output skeleton
+    exp_id = args.exp_name or f"{args.dataset}_{args.backbone}_res{args.img_size}_aug{args.aug}_ep{args.epochs}_seed{args.seed}"
+    exp_dir = os.path.join(args.outdir, exp_id)
+    os.makedirs(exp_dir, exist_ok=True)
+    runlog_path = os.path.join(exp_dir, "run.log")           # JSONL
+    metrics_path = os.path.join(exp_dir, "metrics.json")     # summary
+    ths_path = os.path.join(exp_dir, "thresholds.json")      # per-class thresholds (val-opt)
+    ckpt_path = os.path.join(exp_dir, "ckpt.pt")             # best-on-val(AUPRC)
+    test_json_path = os.path.join(exp_dir, "test.json")      # final test metrics
 
     # 1) 데이터 로더 + 메타
     train_loader, val_loader, test_loader, meta = get_medmnist_loaders(
@@ -205,12 +245,12 @@ def main():
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
-    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
-    best_val = -1.0
+    best_val_auprc = -1.0
     best_val_ths = None
+    best_val_summary = None
     bad = 0
-    ckpt_path = os.path.join(args.outdir, "checkpoints", f"{args.dataset}_{args.backbone}.pt")
 
     # 5) 학습 루프 (간단 워밍업 2ep)
     for ep in range(1, args.epochs + 1):
@@ -226,23 +266,31 @@ def main():
             model, val_loader, criterion, device, task, n_classes,
             thresholds=None, compute_thresholds=(task == "multi-label")
         )
-        dt = round(time.time() - t0, 1)
+        dt = round(time.time() - t0, 3)
         scheduler.step()
 
-        log = {
+        # epoch log (JSONL)
+        epoch_log = {
             "epoch": ep,
             "train_loss": tr_loss,
             **{f"val_{k}": v for k, v in val_metrics.items()},
             "sec": dt,
         }
-        print(json.dumps(log, ensure_ascii=False))
+        with open(runlog_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(epoch_log, ensure_ascii=False) + "\n")
 
-        score = val_metrics["auroc"]
-        if score > best_val:
-            best_val = score
+        # 모델 선택 + 임계값 스냅샷 (AUPRC 기준)
+        score = val_metrics["auprc"]
+        if score > best_val_auprc:
+            best_val_auprc = score
             best_val_ths = ths
+            best_val_summary = val_metrics
             bad = 0
             torch.save(model.state_dict(), ckpt_path)
+            # 임계값 저장(멀티라벨일 때만 존재)
+            if best_val_ths is not None:
+                with open(ths_path, "w", encoding="utf-8") as f:
+                    json.dump({"thresholds": best_val_ths.tolist()}, f, ensure_ascii=False, indent=2)
         else:
             bad += 1
             if bad >= args.patience:
@@ -254,8 +302,44 @@ def main():
         model, test_loader, criterion, device, task, n_classes,
         thresholds=best_val_ths, compute_thresholds=False
     )
-    with open(os.path.join(args.outdir, "logs", f"{args.dataset}_{args.backbone}_test.json"), "w") as f:
+    with open(test_json_path, "w", encoding="utf-8") as f:
         json.dump(test_metrics, f, ensure_ascii=False, indent=2)
+
+    # 7) 요약 메타 + 환경 + 하이퍼 기록
+    summary = {
+        "exp_id": exp_id,
+        "dataset": args.dataset,
+        "task": task,
+        "n_classes": n_classes,
+        "img_size": args.img_size,
+        "batch_size": args.batch_size,
+        "epochs": args.epochs,
+        "lr": args.lr,
+        "backbone": args.backbone,
+        "pretrained": bool(args.pretrained),
+        "augmentation": args.aug,
+        "use_pos_weight": bool(args.use_pos_weight),
+        "seed": args.seed,
+        "device": str(device),
+        "env": {
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "mps_available": torch.backends.mps.is_available(),
+        },
+        "selection_metric": "val_auprc",
+        "best_on_val": best_val_summary,
+        "test": test_metrics,
+        "artifacts": {
+            "runlog": os.path.relpath(runlog_path, start=args.outdir),
+            "thresholds": os.path.relpath(ths_path, start=args.outdir) if os.path.exists(ths_path) else None,
+            "checkpoint": os.path.relpath(ckpt_path, start=args.outdir),
+            "test_json": os.path.relpath(test_json_path, start=args.outdir),
+        },
+    }
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
     print("TEST:", json.dumps(test_metrics, ensure_ascii=False, indent=2))
 
 
