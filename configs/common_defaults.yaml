@@ -1,0 +1,10 @@
+# 공통 디폴트 (필요 시 다른 파일에서 값만 덮어쓰기)
+outdir: results
+seed: 0
+batch_size: 64
+epochs: 12
+lr: 3.0e-4
+img_size: 160
+aug: light         # none | light
+patience: 3
+pretrained: false  # timm backbone 사전학습 가중치
