@@ -1,7 +1,6 @@
 # src/models/baseline_cnn.py
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import timm
 from typing import List, Sequence, Tuple, Optional
 
@@ -18,10 +17,10 @@ class BaselineCNN(nn.Module):
     n_classes: number of output labels
     backbone: timm model name (e.g., "mobilenetv3_small_100", "resnet18")
     pretrained: init with pretrained weights if available
-    multi_label: controls only external usage (logits shape 동일)
-    out_indices: optional tuple/list of backbone stage indices to return as features.
-                 If None, sensible defaults are chosen per backbone family; otherwise
-                 picks last three stages.
+    multi_label: controls only external usage (logits shape is unchanged)
+    out_indices: optional indices of intermediate stages (0-based w.r.t. feature_info list).
+                 If None, we safely pick the last three available stages.
+                 If provided but out of range, they are clamped to valid bounds.
     drop: dropout before the classification head
     """
 
@@ -39,83 +38,99 @@ class BaselineCNN(nn.Module):
         self.backbone_name = backbone
         self.multi_label = multi_label
 
-        # 1) pick out_indices (intermediate taps) safely
-        out_indices = self._suggest_out_indices(backbone, out_indices)
-
-        # 2) create features_only backbone
+        # 1) Build a features_only backbone WITHOUT forcing out_indices first.
+        #    This avoids index errors on certain timm variants (e.g., MobileNetV3)
+        #    because we can inspect feature_info before deciding which taps to keep.
         self.encoder = timm.create_model(
             backbone,
             pretrained=pretrained,
-            features_only=True,
-            out_indices=tuple(out_indices),
+            features_only=True,      # return list of intermediate features
+            out_indices=None,        # let timm choose defaults; we'll sub-select safely
         )
-        # channels for each tapped stage; last is used for head input dim
-        self.feature_info = self.encoder.feature_info
-        self.out_indices = tuple(out_indices)
-        self.out_channels = [int(c) for c in self.feature_info.channels()]
-        in_feats = int(self.out_channels[-1])
+        self.feature_info = self.encoder.feature_info  # timm FeatureInfo
+        self._all_channels = [int(c) for c in self.feature_info.channels()]
+        self._num_stages = len(self._all_channels)
 
-        # 3) head: GAP -> Dropout -> Linear
+        # 2) Decide which indices to tap, robustly.
+        self._sel_idx = self._resolve_out_indices(out_indices)
+
+        # 3) Classification head on the LAST selected stage
+        in_feats = int(self._all_channels[self._sel_idx[-1]])
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.dropout = nn.Dropout(p=drop) if drop and drop > 0 else nn.Identity()
         self.head = nn.Linear(in_feats, self.n_classes)
 
-        # 4) cache for last forward feature maps (for distillation)
+        # 4) cache for last forward feature maps (after sub-selection)
         self._feat_maps: List[torch.Tensor] = []
 
-    @staticmethod
-    def _suggest_out_indices(backbone: str, out_indices: Optional[Sequence[int]]) -> Tuple[int, int, int]:
+    # -------------------- utils --------------------
+    def _resolve_out_indices(self, user_idx: Optional[Sequence[int]]) -> List[int]:
         """
-        Returns a robust triple of stage indices for features_only extraction.
-        - resnet family: use (2, 3, 4)  -> layer2/layer3/layer4
-        - mobilenetv3: choose three deep stages approximating bneck_3/6/12
-        - fallback: last 3 available stages
+        Map user-provided indices (if any) to valid indices over encoder.feature_info,
+        otherwise choose a safe default (last three stages).
         """
-        if out_indices is not None and len(out_indices) > 0:
-            return tuple(out_indices)
+        n = self._num_stages
+        assert n >= 1, "Backbone returned no feature stages."
 
-        name = backbone.lower()
-        if "resnet" in name:
-            return (2, 3, 4)  # stem, l1, l2, l3, l4 -> take l2, l3, l4
-        if "mobilenetv3" in name:
-            # feature_info depth can vary; we pick three deeper taps
-            # will be remapped to valid positive indices by fallback below in __init__
-            # default suggestion approximates bneck_3/6/12
-            return (3, 6, 12)
+        if user_idx and len(user_idx) > 0:
+            # Clamp to valid range and deduplicate while preserving order.
+            mapped: List[int] = []
+            for i in user_idx:
+                i = int(i)
+                if i < 0:
+                    i = max(0, n + i)       # allow negative indexing semantics
+                else:
+                    i = min(i, n - 1)
+                if i not in mapped:
+                    mapped.append(i)
+            # Always ensure strictly increasing order for consistency
+            mapped = sorted(mapped)
+            # Keep at most last three taps (common for AT/Hint)
+            if len(mapped) > 3:
+                mapped = mapped[-3:]
+            return mapped
 
-        # if unknown, we'll re-evaluate after model creation; here just a placeholder
-        return (1, 2, 3)
+        # Default: last three stages (or fewer if the model exposes <3)
+        k = min(3, n)
+        return list(range(n - k, n))
 
+    # -------------------- forward --------------------
     def forward_features(self, x: torch.Tensor) -> List[torch.Tensor]:
         """
-        Returns list of feature maps (length == len(out_indices)).
+        Returns list of selected feature maps (length == len(_sel_idx)).
+        We run the backbone once (with its default out_indices) and sub-select.
         """
-        feats = self.encoder(x)  # list of tensors
-        # ensure list and cache
-        if not isinstance(feats, (list, tuple)):
-            feats = [feats]
-        self._feat_maps = list(feats)
-        return self._feat_maps
+        all_feats = self.encoder(x)  # list of tensors over the default indices
+        if not isinstance(all_feats, (list, tuple)):
+            all_feats = [all_feats]
+
+        # Some timm models may return fewer feats than advertised; be defensive.
+        m = len(all_feats)
+        sel = [i if i < m else (m - 1) for i in self._sel_idx]  # clamp just in case
+        feats = [all_feats[i] for i in sel]
+
+        self._feat_maps = feats
+        return feats
 
     def forward_head(self, feat_map: torch.Tensor) -> torch.Tensor:
         """
-        Apply GAP(+dropout) -> Linear head to penultimate feature map (last stage).
+        Apply GAP(+dropout) -> Linear head to the last selected feature map.
         """
-        x = self.pool(feat_map)      # [B, C, 1, 1]
-        x = x.flatten(1)             # [B, C]
+        x = self.pool(feat_map)   # [B, C, 1, 1]
+        x = x.flatten(1)          # [B, C]
         x = self.dropout(x)
-        logits = self.head(x)        # [B, n_classes]
+        logits = self.head(x)     # [B, n_classes]
         return logits
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        feats = self.forward_features(x)   # caches into self._feat_maps
+        feats = self.forward_features(x)
         penult = feats[-1]
         logits = self.forward_head(penult)
         return logits
 
     def forward_with_features(self, x: torch.Tensor) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """
-        Convenience: returns (logits, feature_maps)
+        Returns (logits, selected_feature_maps).
         """
         feats = self.forward_features(x)
         logits = self.forward_head(feats[-1])

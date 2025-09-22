@@ -11,7 +11,7 @@ from torchmetrics.classification import (
     MultilabelAUROC, MulticlassAUROC, BinaryAUROC,
     MultilabelAveragePrecision, MulticlassAveragePrecision, BinaryAveragePrecision
 )
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import f1_score
 from tqdm import tqdm
 
 from datasets.medmnist_loader import get_medmnist_loaders
@@ -45,12 +45,13 @@ def build_metrics(task: str, n_classes: int, device):
     return auroc, auprc
 
 
-# ------------------------ KD loss (multilabel) ------------------------
+# ------------------------ KD loss ------------------------
 class KDCombinedLoss(nn.Module):
     """
     Multi-label:
-      L = (1-α) * BCEWithLogits (per-class) + α * τ^2 * KL(σ(z_t/τ) || σ(z_s/τ))  [class-weighted]
-    Multi-class/Binary: fall back to CE + KL on softmax with temperature.
+      L = (1-α) * BCEWithLogits + α * τ^2 * KL(σ(z_t/τ) || σ(z_s/τ))  [class-weighted]
+    Multi-class/Binary:
+      L = (1-α) * CE + α * τ^2 * KL(softmax_t || softmax_s)
     """
     def __init__(self, task: str, alpha: float, tau: float,
                  pos_weight: torch.Tensor | None = None,
@@ -59,181 +60,156 @@ class KDCombinedLoss(nn.Module):
         self.task = task
         self.alpha = alpha
         self.tau = tau
-        self.pos_weight = pos_weight
         self.kd_w = kd_class_weights  # [C] or None
         if task == "multi-label":
-            self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
+            self.sup = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
         else:
-            self.ce = nn.CrossEntropyLoss()
+            self.sup = nn.CrossEntropyLoss()
 
     def forward(self, s_logits, t_logits, targets):
-        if self.task == "multi-label":
-            # supervised term
-            bce_mat = self.bce(s_logits, targets.float())  # [B, C]
-            sup = bce_mat.mean()
+        tau = self.tau
+        a = self.alpha
 
-            # KD term (sigmoid with temperature)
+        if self.task == "multi-label":
+            sup_mat = self.sup(s_logits, targets.float())  # [B, C]
+            sup = sup_mat.mean()
+
             with torch.no_grad():
-                t_prob = torch.sigmoid(t_logits / self.tau)
-            s_log_prob = torch.log(torch.sigmoid(s_logits / self.tau) + 1e-8)
-            # KL(P||Q) = P*log(P/Q) + (1-P)*log((1-P)/(1-Q))
-            kl_pos = t_prob * (torch.log(t_prob + 1e-8) - s_log_prob)
-            kl_neg = (1 - t_prob) * (torch.log(1 - t_prob + 1e-8) - torch.log(1 - torch.sigmoid(s_logits / self.tau) + 1e-8))
-            kl_mat = kl_pos + kl_neg  # [B, C]
+                pt = torch.sigmoid(t_logits / tau)
+            ps = torch.sigmoid(s_logits / tau).clamp_(1e-8, 1-1e-8)
+
+            kl_pos = pt * (torch.log(pt + 1e-8) - torch.log(ps))
+            kl_neg = (1 - pt) * (torch.log(1 - pt + 1e-8) - torch.log(1 - ps))
+            kl = kl_pos + kl_neg  # [B, C]
 
             if self.kd_w is not None:
-                w = self.kd_w.view(1, -1).to(kl_mat.device)
-                kd = (kl_mat * w).mean()
+                w = self.kd_w.view(1, -1).to(kl.device)
+                kl = (kl * w).mean()
             else:
-                kd = kl_mat.mean()
+                kl = kl.mean()
 
-            return (1 - self.alpha) * sup + self.alpha * (self.tau ** 2) * kd
+            return (1 - a) * sup + a * (tau ** 2) * kl
 
         elif self.task == "multi-class":
-            sup = self.ce(s_logits, targets.long())
+            sup = self.sup(s_logits, targets.long())
             with torch.no_grad():
-                t_prob = torch.softmax(t_logits / self.tau, dim=1)
-            s_log_prob = torch.log_softmax(s_logits / self.tau, dim=1)
-            kl = F.kl_div(s_log_prob, t_prob, reduction="batchmean")
-            return (1 - self.alpha) * sup + self.alpha * (self.tau ** 2) * kl
+                pt = torch.softmax(t_logits / tau, dim=1)
+            log_ps = torch.log_softmax(s_logits / tau, dim=1)
+            kl = F.kl_div(log_ps, pt, reduction="batchmean")
+            return (1 - a) * sup + a * (tau ** 2) * kl
 
-        else:  # binary-class (2-way CE + KD on softmax)
-            sup = self.ce(s_logits, targets.long())
+        else:
+            sup = self.sup(s_logits, targets.long())
             with torch.no_grad():
-                t_prob = torch.softmax(t_logits / self.tau, dim=1)
-            s_log_prob = torch.log_softmax(s_logits / self.tau, dim=1)
-            kl = F.kl_div(s_log_prob, t_prob, reduction="batchmean")
-            return (1 - self.alpha) * sup + self.alpha * (self.tau ** 2) * kl
+                pt = torch.softmax(t_logits / tau, dim=1)
+            log_ps = torch.log_softmax(s_logits / tau, dim=1)
+            kl = F.kl_div(log_ps, pt, reduction="batchmean")
+            return (1 - a) * sup + a * (tau ** 2) * kl
 
 
-# ------------------------ feature distillation (safe hooks) ------------------------
-class FeatureHook:
-    def __init__(self, module):
-        self.fmap = None
-        self.h = module.register_forward_hook(self._hook)
+# ------------------------ Feature losses ------------------------
+def attention_map(feat: torch.Tensor) -> torch.Tensor:
+    # [B, C, H, W] -> [B, 1, H, W], channel energy
+    am = feat.pow(2).mean(1, keepdim=True)
+    # L2 normalize per-sample
+    b = am.shape[0]
+    am = am.view(b, -1)
+    am = F.normalize(am, p=2, dim=1)
+    return am.view(b, 1, -1)  # flattened spatial with channel=1
 
-    def _hook(self, m, inp, out):
-        self.fmap = out
-
-    def close(self):
-        if self.h is not None:
-            self.h.remove()
-            self.h = None
-
-def pick_feature_layers(model, backbone_name: str):
+def feature_distill_loss(student_feats, teacher_feats, mode: str = "at") -> torch.Tensor:
     """
-    Try to pick reasonable intermediate layers. If not found, return empty list.
-    Works for torchvision resnet and mobilenetv3.
+    student_feats / teacher_feats: list of feature maps (deepest last)
+    mode: 'at' (attention transfer) or 'hint' (FitNets-style)
     """
-    layers = []
-    # get underlying backbone if wrapped
-    backbone = model
-    for cand in ["backbone", "model", "net"]:
-        if hasattr(model, cand):
-            backbone = getattr(model, cand)
-            break
+    m = min(len(student_feats), len(teacher_feats))
+    loss = 0.0
+    for i in range(m):
+        fs, ft = student_feats[i], teacher_feats[i].detach()
+        # spatial align
+        if fs.dim() == 2:  # safety for rare 2D heads
+            fs = fs.unsqueeze(-1).unsqueeze(-1)
+        if ft.dim() == 2:
+            ft = ft.unsqueeze(-1).unsqueeze(-1)
+        if fs.shape[-2:] != ft.shape[-2:]:
+            fs = F.interpolate(fs, size=ft.shape[-2:], mode="bilinear", align_corners=False)
 
-    names = dict(backbone.named_modules())
-    if "resnet" in backbone_name:
-        for k in ["layer2", "layer3", "layer4"]:
-            if k in names: layers.append(names[k])
-    elif "mobilenetv3" in backbone_name:
-        # mobilenetv3 features is Sequential; pick mid/late blocks if exist
-        if hasattr(backbone, "features"):
-            feats = backbone.features
-            idxs = [3, 6, 12]
-            for i in idxs:
-                if 0 <= i < len(feats):
-                    layers.append(feats[i])
-    return layers  # may be empty
+        if mode == "at":
+            # build attention maps and compare
+            am_s = attention_map(fs)  # [B,1,H*W]
+            am_t = attention_map(ft)  # [B,1,H*W]
+            loss = loss + F.mse_loss(am_s, am_t)
+        else:  # hint
+            # channel align with 1x1 conv projection (on-the-fly)
+            if fs.shape[1] != ft.shape[1]:
+                w = torch.empty((ft.shape[1], fs.shape[1], 1, 1), device=fs.device, dtype=fs.dtype)
+                nn.init.kaiming_uniform_(w, a=1.0)
+                fs = F.conv2d(fs, w)
+            loss = loss + F.mse_loss(fs, ft)
+    return loss / max(1, m)
 
 
 # ------------------------ train / eval ------------------------
-def train_one_epoch(student, teacher, loader, loss_fn, device, task,
-                    scaler=None, feat_cfg=None):
+def train_one_epoch(student, teacher, loader, kd_loss, optimizer, device, task,
+                    scaler=None, feat_mode: str = "none", lambda_feat: float = 0.0):
     student.train(); teacher.eval()
     running = 0.0
 
-    # feature hooks (optional)
-    hooks_s, hooks_t = [], []
-    if feat_cfg and feat_cfg["lambda_feat"] > 0 and feat_cfg["layers_s"] and feat_cfg["layers_t"]:
-        hooks_s = [FeatureHook(m) for m in feat_cfg["layers_s"]]
-        hooks_t = [FeatureHook(m) for m in feat_cfg["layers_t"]]
+    use_feat = (lambda_feat > 0.0) and (feat_mode in {"at", "hint"})
+    use_amp = (scaler is not None)
 
     for x, y in tqdm(loader, desc="Train(distill)", leave=False):
         x = x.to(device, non_blocking=True)
         y = y.squeeze().to(device)
 
-        with torch.no_grad():
-            t_logits = teacher(x)
-
-        optimizer = loss_fn._optimizer  # attached outside
         optimizer.zero_grad(set_to_none=True)
 
-        if scaler is not None:
-            with torch.autocast(device_type=("cuda" if torch.cuda.is_available() else "cpu"), dtype=torch.float16 if torch.cuda.is_available() else torch.bfloat16):
-                s_logits = student(x)
-                loss = loss_fn(s_logits, t_logits, y)
-                # feature alignment
-                if feat_cfg and feat_cfg["lambda_feat"] > 0 and hooks_s and hooks_t:
-                    feat_loss = 0.0
-                    for hs, ht in zip(hooks_s, hooks_t):
-                        if hs.fmap is not None and ht.fmap is not None:
-                            fs = hs.fmap
-                            ft = ht.fmap.detach()
-                            # spatial align if needed
-                            if fs.shape[-2:] != ft.shape[-2:]:
-                                fs = F.interpolate(fs, size=ft.shape[-2:], mode="bilinear", align_corners=False)
-                            # channel align (1x1 conv adapter on-the-fly)
-                            if fs.shape[1] != ft.shape[1]:
-                                # project student to teacher channels
-                                w = torch.zeros((ft.shape[1], fs.shape[1], 1, 1), device=fs.device, dtype=fs.dtype)
-                                nn.init.kaiming_uniform_(w, a=1.0)
-                                fs = F.conv2d(fs, w)
-                            feat_loss = feat_loss + F.mse_loss(fs, ft)
-                    loss = loss + feat_cfg["lambda_feat"] * feat_loss
-
+        if use_amp:
+            with torch.amp.autocast("cuda"):
+                if use_feat:
+                    with torch.no_grad():
+                        t_logits, t_feats = teacher.forward_with_features(x)
+                    s_logits, s_feats = student.forward_with_features(x)
+                    loss = kd_loss(s_logits, t_logits, y)
+                    loss_feat = feature_distill_loss(s_feats, t_feats, mode=feat_mode)
+                    loss = loss + lambda_feat * loss_feat
+                else:
+                    with torch.no_grad():
+                        t_logits = teacher(x)
+                    s_logits = student(x)
+                    loss = kd_loss(s_logits, t_logits, y)
             scaler.scale(loss).backward()
             nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
-            s_logits = student(x)
-            loss = loss_fn(s_logits, t_logits, y)
-            # feature alignment
-            if feat_cfg and feat_cfg["lambda_feat"] > 0 and hooks_s and hooks_t:
-                feat_loss = 0.0
-                for hs, ht in zip(hooks_s, hooks_t):
-                    if hs.fmap is not None and ht.fmap is not None:
-                        fs = hs.fmap
-                        ft = ht.fmap.detach()
-                        if fs.shape[-2:] != ft.shape[-2:]:
-                            fs = F.interpolate(fs, size=ft.shape[-2:], mode="bilinear", align_corners=False)
-                        if fs.shape[1] != ft.shape[1]:
-                            w = torch.zeros((ft.shape[1], fs.shape[1], 1, 1), device=fs.device, dtype=fs.dtype)
-                            nn.init.kaiming_uniform_(w, a=1.0)
-                            fs = F.conv2d(fs, w)
-                        feat_loss = feat_loss + F.mse_loss(fs, ft)
-                loss = loss + feat_cfg["lambda_feat"] * feat_loss
+            if use_feat:
+                with torch.no_grad():
+                    t_logits, t_feats = teacher.forward_with_features(x)
+                s_logits, s_feats = student.forward_with_features(x)
+                loss = kd_loss(s_logits, t_logits, y)
+                loss_feat = feature_distill_loss(s_feats, t_feats, mode=feat_mode)
+                loss = loss + lambda_feat * loss_feat
+            else:
+                with torch.no_grad():
+                    t_logits = teacher(x)
+                s_logits = student(x)
+                loss = kd_loss(s_logits, t_logits, y)
 
             loss.backward()
             nn.utils.clip_grad_norm_(student.parameters(), max_norm=1.0)
             optimizer.step()
 
-        running += loss.item() * x.size(0)
-
-    for h in hooks_s + hooks_t:
-        h.close()
+        running += float(loss.item()) * x.size(0)
 
     return running / len(loader.dataset)
 
 
 @torch.no_grad()
-def evaluate(model, loader, task, n_classes, device, compute_thresholds=False, thresholds=None):
+def evaluate(model, loader, task, n_classes, device, thresholds=None, compute_thresholds=False):
     model.eval()
     auroc, auprc = build_metrics(task, n_classes, device)
     losses, y_true_all, y_pred_all = 0.0, [], []
-
     if task in ("multi-class", "binary-class"):
         criterion = nn.CrossEntropyLoss()
     else:
@@ -248,44 +224,42 @@ def evaluate(model, loader, task, n_classes, device, compute_thresholds=False, t
 
         if task == "multi-class":
             probs = torch.softmax(logits, dim=1)
-            y_int = y.long()
-            loss = criterion(logits, y_int)
+            loss = criterion(logits, y.long())
             y_pred = probs.argmax(1).detach().cpu()
-            y_true = y_int.detach().cpu()
+            y_true = y.long().detach().cpu()
             auroc.update(probs.to(device), y.to(device))
             auprc.update(probs.to(device), y.to(device))
 
         elif task == "binary-class":
             probs2 = torch.softmax(logits, dim=1)
             p1 = probs2[:, 1]
-            y_int = y.long()
-            loss = criterion(logits, y_int)
+            loss = criterion(logits, y.long())
             y_pred = probs2.argmax(1).detach().cpu()
-            y_true = y_int.detach().cpu()
+            y_true = y.long().detach().cpu()
             auroc.update(p1.to(device), y.to(device))
             auprc.update(p1.to(device), y.to(device))
 
         else:  # multi-label
             probs = torch.sigmoid(logits)
-            y_float = y.float()
-            loss = criterion(logits, y_float)
+            loss = criterion(logits, y.float())
 
             if thresholds is None:
                 y_pred = (probs > 0.5).long().detach().cpu()
             else:
                 th = torch.tensor(thresholds, device=probs.device).view(1, -1)
                 y_pred = (probs >= th).long().detach().cpu()
-            y_true = y_float.long().detach().cpu()
+            y_true = y.long().detach().cpu()
 
             auroc.update(probs.to(device), y.to(device))
             auprc.update(probs.to(device), y.to(device))
 
             if compute_thresholds:
                 probs_buf.append(probs.detach().cpu())
-                targs_buf.append(y_float.detach().cpu())
+                targs_buf.append(y.float().detach().cpu())
 
-        losses += loss.item() * x.size(0)
-        y_true_all.append(y_true); y_pred_all.append(y_pred)
+        losses += float(loss.item()) * x.size(0)
+        y_true_all.append(y_true)
+        y_pred_all.append(y_pred)
 
     avg_loss = losses / len(loader.dataset)
     y_true_all = torch.cat(y_true_all).numpy()
@@ -313,16 +287,6 @@ def evaluate(model, loader, task, n_classes, device, compute_thresholds=False, t
         preds_opt = (probs_all >= ths[None, :]).astype(int)
         out["f1_macro_opt"] = float(f1_score(targs_all, preds_opt, average="macro", zero_division=0))
         out["thresholds"] = ths.tolist()
-
-        # optional per-class AUROC for debugging
-        per_class_auc = []
-        for c in range(n_classes):
-            try:
-                per_class_auc.append(float(roc_auc_score(targs_all[:, c], probs_all[:, c])))
-            except ValueError:
-                per_class_auc.append(float("nan"))
-        out["per_class_auc"] = per_class_auc
-
     return out, ths
 
 
@@ -333,38 +297,33 @@ def make_class_weights(train_loader, n_classes, mode: str, beta: float):
     """
     if mode not in {"inverse", "effective"}:
         return None
-    # estimate positives per class
     pos = torch.zeros(n_classes)
-    tot = 0
     for _, y in train_loader:
         y = y.squeeze()
-        if y.ndim == 1:  # multiclass/binary
+        if y.ndim == 1:
             continue
         pos += y.sum(dim=0)
-        tot += y.shape[0]
     pos = pos.clamp(min=1.0)
     if mode == "inverse":
         w = (1.0 / pos)
         w = w / w.mean()
         return w
-    else:  # effective number
+    else:
         n = pos
         w = (1 - beta) / (1 - beta ** n)
         w = w / w.mean()
         return w
 
-
 def schedule_alpha_tau(sched: str, t: float, a_min: float, a_max: float, tau_min: float, tau_max: float):
     """
-    t in [0,1]
-    sched: "kd2ce" (front-load KD), "ce2kd" (back-load KD), "const"
+    t in [0,1]; sched: "kd2ce" (front-load KD), "ce2kd" (back-load KD), "const"
     """
     if sched == "kd2ce":
         a = a_max + (a_min - a_max) * t
         tau = tau_max + (tau_min - tau_max) * t
     elif sched == "ce2kd":
         a = a_min + (a_max - a_min) * t
-        tau = tau_min  # or very mild increase
+        tau = tau_min
     else:
         a, tau = a_max, tau_max
     return float(a), float(tau)
@@ -393,7 +352,7 @@ def main():
     ap.add_argument("--cw_kd", type=str, default="none", choices=["none", "inverse", "effective"])
     ap.add_argument("--cw_beta", type=float, default=0.99)
     # feature distill
-    ap.add_argument("--feat", type=str, default="none", choices=["none", "at", "hint"])  # unified knob
+    ap.add_argument("--feat", type=str, default="none", choices=["none", "at", "hint"])
     ap.add_argument("--lambda_feat", type=float, default=0.0)
     # opt/sched
     ap.add_argument("--lr", type=float, default=3e-4)
@@ -442,8 +401,7 @@ def main():
     # class-weighted KD vector
     kd_w = None
     if task == "multi-label" and args.cw_kd != "none":
-        kd_w = make_class_weights(train_loader, n_classes, args.cw_kd, args.cw_beta)
-        kd_w = kd_w.to(device)
+        kd_w = make_class_weights(train_loader, n_classes, args.cw_kd, args.cw_beta).to(device)
 
     # teacher / student
     teacher = BaselineCNN(
@@ -464,33 +422,25 @@ def main():
         multi_label=(task == "multi-label")
     ).to(device)
 
-    # KD loss (we attach optimizer reference for convenience inside train loop)
+    # KD loss / optimizer / scheduler
     kd_loss = KDCombinedLoss(task=task, alpha=args.alpha_max, tau=args.tau_max,
                              pos_weight=pos_weight, kd_class_weights=kd_w)
     optimizer = AdamW(student.parameters(), lr=args.lr)
-    kd_loss._optimizer = optimizer  # attach
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=args.eta_min)
 
-    scaler = torch.cuda.amp.GradScaler(enabled=args.amp and torch.cuda.is_available())
+    # AMP scaler (CUDA only; MPS/CPU는 비활성)
+    scaler = None
+    if args.amp and torch.cuda.is_available():
+        scaler = torch.amp.GradScaler('cuda', enabled=True)
 
-    # feature distill setup (safe)
-    feat_cfg = {"lambda_feat": float(args.lambda_feat), "layers_s": [], "layers_t": []}
-    if args.lambda_feat > 0 and args.feat in {"at", "hint"}:
-        layers_s = pick_feature_layers(student, args.student_backbone)
-        layers_t = pick_feature_layers(teacher, args.teacher_backbone)
-        # align length
-        m = min(len(layers_s), len(layers_t))
-        feat_cfg["layers_s"] = layers_s[:m]
-        feat_cfg["layers_t"] = layers_t[:m]
-
+    # training
     best_sel = -1.0
     best_val = None
     best_ths = None
     no_improve = 0
 
-    # training
     for ep in range(1, args.epochs + 1):
-        # warm-up LR (first args.warmup_ep epochs)
+        # warm-up
         if ep <= max(1, args.warmup_ep):
             warm = ep / float(max(1, args.warmup_ep))
             for g in optimizer.param_groups:
@@ -503,11 +453,16 @@ def main():
         kd_loss.tau = tau_now
 
         t0 = time.time()
-        tr_loss = train_one_epoch(student, teacher, train_loader, kd_loss, device, task,
-                                  scaler=scaler, feat_cfg=feat_cfg)
+        tr_loss = train_one_epoch(
+            student, teacher, train_loader,
+            kd_loss, optimizer, device, task,
+            scaler=scaler, feat_mode=args.feat, lambda_feat=float(args.lambda_feat)
+        )
 
-        val_metrics, ths = evaluate(student, val_loader, task, n_classes, device,
-                                    compute_thresholds=(task == "multi-label"), thresholds=None)
+        val_metrics, ths = evaluate(
+            student, val_loader, task, n_classes, device,
+            compute_thresholds=(task == "multi-label"), thresholds=None
+        )
         dt = round(time.time() - t0, 3)
         scheduler.step()
         lr_now = scheduler.get_last_lr()[0] if hasattr(scheduler, "get_last_lr") else args.lr
@@ -543,8 +498,10 @@ def main():
 
     # test with frozen thresholds
     student.load_state_dict(torch.load(ckpt_path, map_location=device))
-    test_metrics, _ = evaluate(student, test_loader, task, n_classes, device,
-                               compute_thresholds=False, thresholds=best_ths)
+    test_metrics, _ = evaluate(
+        student, test_loader, task, n_classes, device,
+        compute_thresholds=False, thresholds=best_ths
+    )
     with open(test_json_path, "w", encoding="utf-8") as f:
         json.dump(test_metrics, f, ensure_ascii=False, indent=2)
     print("TEST:", json.dumps(test_metrics, ensure_ascii=False, indent=2))
