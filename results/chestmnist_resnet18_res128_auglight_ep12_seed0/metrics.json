@@ -1,0 +1,74 @@
+{
+  "exp_id": "chestmnist_resnet18_res128_auglight_ep12_seed0",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "lr": 0.0003,
+  "backbone": "resnet18",
+  "pretrained": true,
+  "augmentation": "light",
+  "use_pos_weight": false,
+  "seed": 0,
+  "device": "mps",
+  "env": {
+    "python": "3.11.9",
+    "torch": "2.7.1",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "selection_metric": "val_auprc",
+  "best_on_val": {
+    "loss": 0.15813553934296415,
+    "auroc": 0.776580274105072,
+    "auprc": 0.16741350293159485,
+    "f1_macro": 0.06009285357305098,
+    "f1_macro_opt": 0.2328837594927484,
+    "thresholds": [
+      0.17000000178813934,
+      0.18000000715255737,
+      0.2800000011920929,
+      0.20000000298023224,
+      0.17000000178813934,
+      0.10000000149011612,
+      0.05999999865889549,
+      0.11999999731779099,
+      0.14000000059604645,
+      0.20000000298023224,
+      0.10000000149011612,
+      0.03999999910593033,
+      0.10000000149011612,
+      0.029999999329447746
+    ],
+    "per_class_auc": [
+      0.7667471841017882,
+      0.871203357925737,
+      0.8469684735722477,
+      0.6710283462315952,
+      0.7856214461015669,
+      0.64807248444123,
+      0.7258321475708032,
+      0.8112183261856616,
+      0.7906289900653862,
+      0.8764461384880661,
+      0.7691259789161887,
+      0.7065151041150035,
+      0.7503662872941431,
+      0.8523493447494862
+    ]
+  },
+  "test": {
+    "loss": 0.16166659956542637,
+    "auroc": 0.7775859832763672,
+    "auprc": 0.16831199824810028,
+    "f1_macro": 0.2261001230692364
+  },
+  "artifacts": {
+    "runlog": "chestmnist_resnet18_res128_auglight_ep12_seed0/run.log",
+    "thresholds": "chestmnist_resnet18_res128_auglight_ep12_seed0/thresholds.json",
+    "checkpoint": "chestmnist_resnet18_res128_auglight_ep12_seed0/ckpt.pt",
+    "test_json": "chestmnist_resnet18_res128_auglight_ep12_seed0/test.json"
+  }
+}

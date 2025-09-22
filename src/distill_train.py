@@ -45,13 +45,13 @@ def build_metrics(task: str, n_classes: int, device):
     return auroc, auprc
 
 
-# ------------------------ KD loss ------------------------
+# ------------------------ KD loss (multilabel) ------------------------
 class KDCombinedLoss(nn.Module):
     """
     Multi-label:
-      L = (1-α) * BCEWithLogits + α * τ^2 * KL(σ(z_t/τ) || σ(z_s/τ))  [class-weighted]
-    Multi-class/Binary:
-      L = (1-α) * CE + α * τ^2 * KL(softmax_t || softmax_s)
+      L = (1-α) * BCEWithLogits (per-class) +
+          α * τ^2 * BCEWithLogits( s_logits/τ , sigmoid(t_logits/τ).detach() ) [class-weighted]
+    Multi-class/Binary: CE + KL on softmax with temperature (변경 없음).
     """
     def __init__(self, task: str, alpha: float, tau: float,
                  pos_weight: torch.Tensor | None = None,
@@ -61,50 +61,55 @@ class KDCombinedLoss(nn.Module):
         self.alpha = alpha
         self.tau = tau
         self.kd_w = kd_class_weights  # [C] or None
+
         if task == "multi-label":
-            self.sup = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
+            # supervised term: per-class BCEWithLogits
+            self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="none")
         else:
-            self.sup = nn.CrossEntropyLoss()
+            self.ce = nn.CrossEntropyLoss()
 
     def forward(self, s_logits, t_logits, targets):
-        tau = self.tau
-        a = self.alpha
-
         if self.task == "multi-label":
-            sup_mat = self.sup(s_logits, targets.float())  # [B, C]
-            sup = sup_mat.mean()
+            # 1) supervised (hard) term
+            bce_mat = self.bce(s_logits, targets.float())  # [B, C]
+            sup = bce_mat.mean()
 
+            # 2) soft KD term (teacher probs detached)
+            tau = self.tau
             with torch.no_grad():
-                pt = torch.sigmoid(t_logits / tau)
-            ps = torch.sigmoid(s_logits / tau).clamp_(1e-8, 1-1e-8)
+                t_soft = torch.sigmoid(t_logits / tau)  # [B, C], no grad
 
-            kl_pos = pt * (torch.log(pt + 1e-8) - torch.log(ps))
-            kl_neg = (1 - pt) * (torch.log(1 - pt + 1e-8) - torch.log(1 - ps))
-            kl = kl_pos + kl_neg  # [B, C]
+            # per-element BCE-with-logits in logit space (안정적, MPS 안전)
+            kd_elem = F.binary_cross_entropy_with_logits(
+                s_logits / tau, t_soft, reduction="none"
+            )  # [B, C]
 
             if self.kd_w is not None:
-                w = self.kd_w.view(1, -1).to(kl.device)
-                kl = (kl * w).mean()
+                w = self.kd_w.view(1, -1).to(kd_elem.device)
+                kd = (kd_elem * w).mean()
             else:
-                kl = kl.mean()
+                kd = kd_elem.mean()
 
-            return (1 - a) * sup + a * (tau ** 2) * kl
+            return (1 - self.alpha) * sup + self.alpha * (tau ** 2) * kd
 
         elif self.task == "multi-class":
-            sup = self.sup(s_logits, targets.long())
+            sup = self.ce(s_logits, targets.long())
+            tau = self.tau
             with torch.no_grad():
-                pt = torch.softmax(t_logits / tau, dim=1)
-            log_ps = torch.log_softmax(s_logits / tau, dim=1)
-            kl = F.kl_div(log_ps, pt, reduction="batchmean")
-            return (1 - a) * sup + a * (tau ** 2) * kl
+                t_prob = torch.softmax(t_logits / tau, dim=1)
+            s_log_prob = torch.log_softmax(s_logits / tau, dim=1)
+            kl = F.kl_div(s_log_prob, t_prob, reduction="batchmean")
+            return (1 - self.alpha) * sup + self.alpha * (tau ** 2) * kl
 
-        else:
-            sup = self.sup(s_logits, targets.long())
+        else:  # binary-class (2-way CE + KD on softmax)
+            sup = self.ce(s_logits, targets.long())
+            tau = self.tau
             with torch.no_grad():
-                pt = torch.softmax(t_logits / tau, dim=1)
-            log_ps = torch.log_softmax(s_logits / tau, dim=1)
-            kl = F.kl_div(log_ps, pt, reduction="batchmean")
-            return (1 - a) * sup + a * (tau ** 2) * kl
+                t_prob = torch.softmax(t_logits / tau, dim=1)
+            s_log_prob = torch.log_softmax(s_logits / tau, dim=1)
+            kl = F.kl_div(s_log_prob, t_prob, reduction="batchmean")
+            return (1 - self.alpha) * sup + self.alpha * (tau ** 2) * kl
+
 
 
 # ------------------------ Feature losses ------------------------

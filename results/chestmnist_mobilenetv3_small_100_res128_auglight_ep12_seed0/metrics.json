@@ -1,0 +1,74 @@
+{
+  "exp_id": "chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "lr": 0.0003,
+  "backbone": "mobilenetv3_small_100",
+  "pretrained": true,
+  "augmentation": "light",
+  "use_pos_weight": false,
+  "seed": 0,
+  "device": "mps",
+  "env": {
+    "python": "3.11.9",
+    "torch": "2.7.1",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "selection_metric": "val_auprc",
+  "best_on_val": {
+    "loss": 0.15727203046667756,
+    "auroc": 0.7811989784240723,
+    "auprc": 0.17334909737110138,
+    "f1_macro": 0.0741728016505877,
+    "f1_macro_opt": 0.24189812250074252,
+    "thresholds": [
+      0.18000000715255737,
+      0.3499999940395355,
+      0.30000001192092896,
+      0.1599999964237213,
+      0.14000000059604645,
+      0.09000000357627869,
+      0.05000000074505806,
+      0.11999999731779099,
+      0.14000000059604645,
+      0.11999999731779099,
+      0.2199999988079071,
+      0.07999999821186066,
+      0.10999999940395355,
+      0.03999999910593033
+    ],
+    "per_class_auc": [
+      0.7688094922092744,
+      0.8780011840786958,
+      0.8486686947846213,
+      0.6766577166764203,
+      0.8059268265055691,
+      0.6365724070742068,
+      0.7500959687691174,
+      0.8342102193187122,
+      0.7963759303056811,
+      0.8925401579090662,
+      0.7897343041573811,
+      0.7172266374827093,
+      0.7492215775433672,
+      0.792744022448276
+    ]
+  },
+  "test": {
+    "loss": 0.1613510818462421,
+    "auroc": 0.7831858992576599,
+    "auprc": 0.17348527908325195,
+    "f1_macro": 0.2264619661085409
+  },
+  "artifacts": {
+    "runlog": "chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0/run.log",
+    "thresholds": "chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0/thresholds.json",
+    "checkpoint": "chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0/ckpt.pt",
+    "test_json": "chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0/test.json"
+  }
+}
