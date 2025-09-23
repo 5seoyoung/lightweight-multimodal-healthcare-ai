@@ -1,0 +1,71 @@
+{
+  "exp_id": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedkd2ce_a0.05-0.3_t3.0-6.0_cweffective_featnone_ep12_seed0",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "augmentation": "light",
+  "teacher_backbone": "resnet18",
+  "student_backbone": "mobilenetv3_small_100",
+  "teacher_ckpt_used": true,
+  "sched": "kd2ce",
+  "alpha_min": 0.05,
+  "alpha_max": 0.3,
+  "tau_min": 3.0,
+  "tau_max": 6.0,
+  "cw_kd": "effective",
+  "cw_beta": 0.99,
+  "feat": "none",
+  "lambda_feat": 0.0,
+  "optimizer": "AdamW",
+  "lr": 0.0003,
+  "eta_min": 1e-06,
+  "selection_metric": "auprc",
+  "early_patience": 3,
+  "amp": false,
+  "seed": 0,
+  "device": "mps",
+  "env": {
+    "python": "3.11.9",
+    "torch": "2.7.1",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "best_on_val": {
+    "loss": 0.4170307728210143,
+    "auroc": 0.7736368179321289,
+    "auprc": 0.16430234909057617,
+    "f1_macro": 0.19875939271138568,
+    "f1_macro_opt": 0.23395017781353217,
+    "thresholds": [
+      0.6399999856948853,
+      0.7799999713897705,
+      0.6700000166893005,
+      0.5299999713897705,
+      0.6399999856948853,
+      0.5400000214576721,
+      0.8299999833106995,
+      0.7400000095367432,
+      0.6800000071525574,
+      0.8299999833106995,
+      0.7599999904632568,
+      0.8199999928474426,
+      0.75,
+      0.9700000286102295
+    ]
+  },
+  "test": {
+    "loss": 0.4190999741223835,
+    "auroc": 0.7772730588912964,
+    "auprc": 0.1664792150259018,
+    "f1_macro": 0.2220283009748332
+  },
+  "artifacts": {
+    "runlog": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedkd2ce_a0.05-0.3_t3.0-6.0_cweffective_featnone_ep12_seed0/run.log",
+    "thresholds": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedkd2ce_a0.05-0.3_t3.0-6.0_cweffective_featnone_ep12_seed0/thresholds.json",
+    "checkpoint": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedkd2ce_a0.05-0.3_t3.0-6.0_cweffective_featnone_ep12_seed0/ckpt.pt",
+    "test_json": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedkd2ce_a0.05-0.3_t3.0-6.0_cweffective_featnone_ep12_seed0/test.json"
+  }
+}
