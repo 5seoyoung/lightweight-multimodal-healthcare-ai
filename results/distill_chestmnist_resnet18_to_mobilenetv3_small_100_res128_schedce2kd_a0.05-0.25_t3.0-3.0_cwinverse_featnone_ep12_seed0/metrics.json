@@ -1,0 +1,71 @@
+{
+  "exp_id": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.25_t3.0-3.0_cwinverse_featnone_ep12_seed0",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "augmentation": "light",
+  "teacher_backbone": "resnet18",
+  "student_backbone": "mobilenetv3_small_100",
+  "teacher_ckpt_used": true,
+  "sched": "ce2kd",
+  "alpha_min": 0.05,
+  "alpha_max": 0.25,
+  "tau_min": 3.0,
+  "tau_max": 3.0,
+  "cw_kd": "inverse",
+  "cw_beta": 0.99,
+  "feat": "none",
+  "lambda_feat": 0.0,
+  "optimizer": "AdamW",
+  "lr": 0.0003,
+  "eta_min": 1e-06,
+  "selection_metric": "auprc",
+  "early_patience": 3,
+  "amp": false,
+  "seed": 0,
+  "device": "mps",
+  "env": {
+    "python": "3.13.5",
+    "torch": "2.8.0",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "best_on_val": {
+    "loss": 0.43142953211158896,
+    "auroc": 0.769658088684082,
+    "auprc": 0.1662566363811493,
+    "f1_macro": 0.19907341237788892,
+    "f1_macro_opt": 0.23989556503283935,
+    "thresholds": [
+      0.6299999952316284,
+      0.8899999856948853,
+      0.7099999785423279,
+      0.5,
+      0.6800000071525574,
+      0.5799999833106995,
+      0.7900000214576721,
+      0.7099999785423279,
+      0.7699999809265137,
+      0.8299999833106995,
+      0.7099999785423279,
+      0.6700000166893005,
+      0.6499999761581421,
+      0.8199999928474426
+    ]
+  },
+  "test": {
+    "loss": 0.43381366092904816,
+    "auroc": 0.7780249714851379,
+    "auprc": 0.16778984665870667,
+    "f1_macro": 0.23148491001779958
+  },
+  "artifacts": {
+    "runlog": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.25_t3.0-3.0_cwinverse_featnone_ep12_seed0/run.log",
+    "thresholds": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.25_t3.0-3.0_cwinverse_featnone_ep12_seed0/thresholds.json",
+    "checkpoint": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.25_t3.0-3.0_cwinverse_featnone_ep12_seed0/ckpt.pt",
+    "test_json": "distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.25_t3.0-3.0_cwinverse_featnone_ep12_seed0/test.json"
+  }
+}
