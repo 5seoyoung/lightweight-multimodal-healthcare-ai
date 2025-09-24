@@ -1,0 +1,71 @@
+{
+  "exp_id": "distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "augmentation": "light",
+  "teacher_backbone": "mobilenetv3_small_100",
+  "student_backbone": "mobilenetv3_small_100",
+  "teacher_ckpt_used": true,
+  "sched": "kd2ce",
+  "alpha_min": 0.1,
+  "alpha_max": 0.4,
+  "tau_min": 3.0,
+  "tau_max": 5.0,
+  "cw_kd": "inverse",
+  "cw_beta": 0.99,
+  "feat": "none",
+  "lambda_feat": 0.0,
+  "optimizer": "AdamW",
+  "lr": 0.0003,
+  "eta_min": 1e-06,
+  "selection_metric": "auprc",
+  "early_patience": 3,
+  "amp": false,
+  "seed": 0,
+  "device": "mps",
+  "env": {
+    "python": "3.13.5",
+    "torch": "2.8.0",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "best_on_val": {
+    "loss": 0.5082737447021373,
+    "auroc": 0.7681611180305481,
+    "auprc": 0.16431975364685059,
+    "f1_macro": 0.1868685668982736,
+    "f1_macro_opt": 0.23763049197868083,
+    "thresholds": [
+      0.6299999952316284,
+      0.9100000262260437,
+      0.6499999761581421,
+      0.5099999904632568,
+      0.7200000286102295,
+      0.6200000047683716,
+      0.8199999928474426,
+      0.7599999904632568,
+      0.6700000166893005,
+      0.800000011920929,
+      0.8600000143051147,
+      0.7300000190734863,
+      0.7599999904632568,
+      0.6399999856948853
+    ]
+  },
+  "test": {
+    "loss": 0.5095778794266954,
+    "auroc": 0.7706629037857056,
+    "auprc": 0.16621102392673492,
+    "f1_macro": 0.22683676595003463
+  },
+  "artifacts": {
+    "runlog": "distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0/run.log",
+    "thresholds": "distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0/thresholds.json",
+    "checkpoint": "distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0/ckpt.pt",
+    "test_json": "distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0/test.json"
+  }
+}

@@ -111,7 +111,6 @@ class KDCombinedLoss(nn.Module):
             return (1 - self.alpha) * sup + self.alpha * (tau ** 2) * kl
 
 
-
 # ------------------------ Feature losses ------------------------
 def attention_map(feat: torch.Tensor) -> torch.Tensor:
     # [B, C, H, W] -> [B, 1, H, W], channel energy
@@ -333,6 +332,45 @@ def schedule_alpha_tau(sched: str, t: float, a_min: float, a_max: float, tau_min
         a, tau = a_max, tau_max
     return float(a), float(tau)
 
+def _remap_and_filter_state_dict(sd: dict, model: torch.nn.Module) -> dict:
+    """
+    - DataParallel 'module.' prefix 제거
+    - timm 백본 최상위 키를 'encoder.'로 prefix 붙여 현재 래퍼 구조에 맞춤
+    - classifier/head 등 분류기 관련 키는 드롭(백본 가중치만 이식)
+    - shape 안 맞는 키는 드롭
+    """
+    # 1) DP prefix 제거
+    if any(k.startswith("module.") for k in sd.keys()):
+        sd = {k.replace("module.", "", 1): v for k, v in sd.items()}
+
+    # 2) 현재 모델의 키 목록
+    msd = model.state_dict()
+    keep = {}
+
+    # 3) 헤드/클래스 관련 키 패턴
+    drop_prefixes = ("head.", "classifier.", "fc.")
+    # 4) 백본 최상위로 올 수 있는 키들(모델마다 일부 다름)
+    backbone_roots = (
+        "conv_stem", "bn1", "bn2", "blocks", "stages", "features",
+        "layer1", "layer2", "layer3", "layer4", "act", "conv_head", "global_pool"
+    )
+
+    for k, v in sd.items():
+        # 분류기/헤드 키는 무시
+        if k.startswith(drop_prefixes) or ".head." in k or ".classifier." in k:
+            continue
+
+        k2 = k
+        # 현재 래퍼는 encoder.* 아래에 백본이 있으므로 prefix 보정
+        if not k.startswith("encoder.") and (k.split(".")[0] in backbone_roots):
+            k2 = "encoder." + k
+
+        # shape 맞는 것만 채택
+        if k2 in msd and msd[k2].shape == v.shape:
+            keep[k2] = v
+
+    return keep
+
 
 # ------------------------ Main ------------------------
 def main():
@@ -413,13 +451,25 @@ def main():
         n_classes, backbone=args.teacher_backbone, pretrained=True,
         multi_label=(task == "multi-label")
     ).to(device)
+
     if args.teacher_ckpt and os.path.isfile(args.teacher_ckpt):
-        sd = torch.load(args.teacher_ckpt, map_location=device)
-        try:
-            teacher.load_state_dict(sd, strict=False)
-        except Exception:
-            teacher.load_state_dict(sd, strict=True)
-    for p in teacher.parameters(): p.requires_grad = False
+        raw_sd = torch.load(args.teacher_ckpt, map_location=device)
+        if isinstance(raw_sd, dict) and "state_dict" in raw_sd:
+            raw_sd = raw_sd["state_dict"]
+        filtered = _remap_and_filter_state_dict(raw_sd, teacher)
+
+        loaded_keys = set(filtered.keys())
+        total_keys = len(teacher.state_dict())
+        print(json.dumps({
+            "msg": "teacher_ckpt_partial_load",
+            "loaded_keys": len(loaded_keys),
+            "total_params": total_keys
+        }))
+
+        teacher.load_state_dict(filtered, strict=False)
+    else:
+        print(json.dumps({"msg": "teacher_ckpt_not_found_or_skipped", "path": args.teacher_ckpt}))
+
     teacher.eval()
 
     student = BaselineCNN(
