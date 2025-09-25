@@ -1,0 +1,39 @@
+{
+  "thresholds": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "thresholds_round3": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "n_classes": 14,
+  "split": "val",
+  "img_size": 128,
+  "backbone": "mobilenetv3_small_100",
+  "ckpt": "results/distill_chestmnist_resnet18_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.25_t3.0-3.0_cwinverse_featnone_ep12_seed0/ckpt.pt"
+}
