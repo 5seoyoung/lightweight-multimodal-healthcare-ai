@@ -1,0 +1,6 @@
+[OK] saved per-class thresholds -> results/thresholds_chestmnist_resnet18_res128_auglight_ep12_seed0.json
+[Probs quantiles] [0.0, 0.001, 0.004, 0.007, 0.011, 0.018, 0.029, 0.047, 0.081, 0.152, 0.927] (N=157066)
+[OPTIMIZED thresholds on current split]
+[SPLIT] val | F1_macro@per-class-th = 0.2329 | ECE = 0.0056
+Per-class thresholds: [0.17000000178813934, 0.18000000715255737, 0.2800000011920929, 0.20000000298023224, 0.17000000178813934, 0.10000000149011612, 0.05999999865889549, 0.11999999731779099, 0.14000000059604645, 0.20000000298023224, 0.10000000149011612, 0.03999999910593033, 0.10000000149011612, 0.029999999329447746]
+[OK] saved results/reliability_chestmnist_resnet18_res128_auglight_ep12_seed0_val.png

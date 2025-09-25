@@ -1,0 +1,5 @@
+[Probs quantiles] [0.012, 0.127, 0.172, 0.223, 0.279, 0.339, 0.402, 0.476, 0.571, 0.696, 0.999] (N=314062)
+[LOADED thresholds] thresholds_distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.3_t3.0-3.0_cwnone_featnone_ep12_seed0.json
+[SPLIT] test | F1_macro@per-class-th = 0.2250 | ECE = 0.3227
+Per-class thresholds: [0.5899999737739563, 0.7599999904632568, 0.6899999976158142, 0.5299999713897705, 0.699999988079071, 0.5899999737739563, 0.7400000095367432, 0.7400000095367432, 0.7400000095367432, 0.8500000238418579, 0.7599999904632568, 0.75, 0.7900000214576721, 0.7099999785423279]
+[OK] saved results/reliability_distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedce2kd_a0.05-0.3_t3.0-3.0_cwnone_featnone_ep12_seed0_test.png

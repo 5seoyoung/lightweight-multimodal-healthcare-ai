@@ -1,0 +1,6 @@
+[OK] saved per-class thresholds -> results/thresholds_distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0.json
+[Probs quantiles] [0.006, 0.1, 0.149, 0.205, 0.269, 0.334, 0.388, 0.452, 0.543, 0.682, 0.993] (N=157066)
+[OPTIMIZED thresholds on current split]
+[SPLIT] val | F1_macro@per-class-th = 0.2376 | ECE = 0.3077
+Per-class thresholds: [0.6299999952316284, 0.9100000262260437, 0.6499999761581421, 0.5099999904632568, 0.7200000286102295, 0.6200000047683716, 0.8199999928474426, 0.7599999904632568, 0.6700000166893005, 0.800000011920929, 0.8600000143051147, 0.7300000190734863, 0.7599999904632568, 0.6399999856948853]
+[OK] saved results/reliability_distill_chestmnist_mobilenetv3_small_100_to_mobilenetv3_small_100_res128_schedkd2ce_a0.1-0.4_t3.0-5.0_cwinverse_featnone_ep12_seed0_val.png

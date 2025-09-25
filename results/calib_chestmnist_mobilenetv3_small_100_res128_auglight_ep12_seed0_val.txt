@@ -1,0 +1,6 @@
+[OK] saved per-class thresholds -> results/thresholds_chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0.json
+[Probs quantiles] [0.0, 0.002, 0.004, 0.008, 0.013, 0.021, 0.034, 0.058, 0.1, 0.181, 0.874] (N=157066)
+[OPTIMIZED thresholds on current split]
+[SPLIT] val | F1_macro@per-class-th = 0.2360 | ECE = 0.0115
+Per-class thresholds: [0.17000000178813934, 0.2800000011920929, 0.2800000011920929, 0.25, 0.23999999463558197, 0.11999999731779099, 0.05000000074505806, 0.11999999731779099, 0.17000000178813934, 0.12999999523162842, 0.10000000149011612, 0.029999999329447746, 0.10000000149011612, 0.009999999776482582]
+[OK] saved results/reliability_chestmnist_mobilenetv3_small_100_res128_auglight_ep12_seed0_val.png
