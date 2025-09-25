@@ -1,0 +1,5 @@
+[Probs quantiles] [0.993, 0.999, 0.999, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] (N=314062)
+[LOADED thresholds] thresholds_chestmnist_mobilenetv3_small_100_asl_ep12.json
+[SPLIT] test | F1_macro@per-class-th = 0.0962 | ECE = 0.9470
+Per-class thresholds: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+[OK] saved results/reliability_chestmnist_mobilenetv3_small_100_asl_ep12_test.png

@@ -1,52 +1,58 @@
 # scripts/calibration_and_thresholds.py
-import argparse, json, os, numpy as np, torch, matplotlib.pyplot as plt
+import os, argparse, json, numpy as np, torch, matplotlib.pyplot as plt
 from sklearn.metrics import f1_score
+# 프로젝트 로컬 임포트 (PYTHONPATH=. 필요)
 from src.datasets.medmnist_loader import get_medmnist_loaders
 from src.models.baseline_cnn import BaselineCNN
 from src.utils.thresholds import optimal_thresholds
-from torch.utils.data import DataLoader
 
-def multilabel_ece(probs, targets, bins=15, quantile=False):
-    """ECE for multilabel: sum_k p(B_k)*|mean(conf)-mean(target)|."""
+def reliability_points(probs, targets, bins=10, quantile=False):
+    """
+    Multilabel reliability: x=confidence, y=empirical positive rate.
+    probs, targets: [N, C] numpy.
+    """
     conf = probs.flatten()
-    targ = targets.flatten()
+    pos = (targets == 1).astype(np.float32).flatten()
+
     if quantile:
-        qs = np.linspace(0, 1, bins + 1)
-        edges = np.quantile(conf, qs)
-        # 중복 edge 방지(동일값이 많은 경우)
-        edges[0], edges[-1] = 0.0, 1.0
-        edges = np.unique(edges)
-        # 너무 중복이면 fallback
-        if len(edges) < 3:
-            edges = np.linspace(0, 1, bins + 1)
+        edges = np.quantile(conf, np.linspace(0, 1, bins + 1))
+        edges[0], edges[-1] = 0.0, 1.0  # 안정화
     else:
         edges = np.linspace(0, 1, bins + 1)
 
-    ece, accs, confs = 0.0, [], []
-    for i in range(len(edges)-1):
-        m = (conf >= edges[i]) & (conf < edges[i+1])
-        if m.sum() == 0: 
+    xs, ys, ns = [], [], []
+    for i in range(bins):
+        m = (conf >= edges[i]) & (conf < edges[i + 1])
+        if m.sum() == 0:
             continue
-        avg_conf = conf[m].mean()
-        pos_rate = targ[m].mean()  # 실측 양성률
-        ece += abs(avg_conf - pos_rate) * (m.mean())
-        accs.append(pos_rate)
-        confs.append(avg_conf)
-    return float(ece), np.array(confs), np.array(accs)
+        xs.append(conf[m].mean())
+        ys.append(pos[m].mean())
+        ns.append(int(m.sum()))
+    return np.array(xs), np.array(ys), np.array(ns), edges
 
-def reliability_plot(confs, pos_rates, title, outp):
-    if len(confs) == 0:
-        print("[WARN] No non-empty bins; plot skipped.")
-        return
-    plt.figure(figsize=(4,4))
-    plt.plot([0,1],[0,1],'--')
-    plt.plot(confs, pos_rates, marker='o')
-    plt.xlabel("Confidence")
-    plt.ylabel("Empirical Positive Rate")
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(outp, dpi=200)
-    print(f"[OK] saved {outp}")
+def ece_from_points(xs, ys, ns, total):
+    """Expected Calibration Error from binned points."""
+    if len(xs) == 0:
+        return float("nan")
+    w = ns.astype(np.float64) / float(total)
+    return float(np.sum(np.abs(xs - ys) * w))
+
+def load_threshold_list(path, n_classes):
+    with open(path, "r") as f:
+        obj = json.load(f)
+    # 호환: [..] 또는 {"thresholds":[..]} 둘 다 지원
+    ths = obj.get("thresholds", obj)
+    ths = np.array(ths, dtype=np.float32)
+    if ths.ndim != 1 or len(ths) != n_classes:
+        raise ValueError(f"Loaded thresholds shape mismatch: {ths.shape} vs n_classes={n_classes}")
+    return ths
+
+def save_threshold_list(path, ths):
+    obj = {"thresholds": [float(x) for x in ths.tolist()]}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2)
+    print(f"[OK] saved per-class thresholds -> {path}")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -54,70 +60,84 @@ def main():
     ap.add_argument("--img_size", type=int, default=128)
     ap.add_argument("--backbone", default="mobilenetv3_small_100")
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--split", default="val", choices=["val","test"])
+    ap.add_argument("--split", default="val", choices=["val", "test"])
     ap.add_argument("--bins", type=int, default=10)
-    ap.add_argument("--quantilebins", action="store_true",
-                    help="Use quantile bins (권장).")
-    ap.add_argument("--save_thresholds", default="results/thresholds.json")
+    ap.add_argument("--quantilebins", action="store_true")
+    ap.add_argument("--save_thresholds", type=str, default=None)
+    ap.add_argument("--load_thresholds", type=str, default=None)
     args = ap.parse_args()
 
-    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     device = torch.device("cuda" if torch.cuda.is_available()
                           else ("mps" if torch.backends.mps.is_available() else "cpu"))
 
-    # 로더 받아오고, 멀티프로세싱 이슈 회피 위해 재래핑(num_workers=0)
     _, val_loader, test_loader, meta = get_medmnist_loaders(
-        args.dataset, batch_size=128, img_size=args.img_size, augment="none")
-    base_loader = val_loader if args.split == "val" else test_loader
-    loader = DataLoader(base_loader.dataset, batch_size=128,
-                        shuffle=False, num_workers=0, pin_memory=False)
-
+        args.dataset, batch_size=128, img_size=args.img_size, augment="none"
+    )
+    loader = val_loader if args.split == "val" else test_loader
     n_classes = meta["n_classes"]
+
+    # 모델 & 체크포인트
     model = BaselineCNN(n_classes, backbone=args.backbone, pretrained=False, multi_label=True).to(device)
     sd = torch.load(args.ckpt, map_location=device)
     try:
         model.load_state_dict(sd, strict=False)
-    except:
+    except Exception:
         model.load_state_dict(sd, strict=True)
     model.eval()
 
+    # 예측 수집
     all_probs, all_targs = [], []
     with torch.no_grad():
         for x, y in loader:
-            x = x.to(device); y = y.squeeze().float()
+            x = x.to(device)
+            y = y.squeeze().float()
             p = torch.sigmoid(model(x))
-            all_probs.append(p.cpu()); all_targs.append(y)
+            all_probs.append(p.cpu())
+            all_targs.append(y)
     probs = torch.cat(all_probs).numpy()
     targs = torch.cat(all_targs).numpy()
 
-    # --- thresholds ---
-    if args.split == "val":
-        ths = optimal_thresholds(probs, targs, steps=100)  # per-class
-        with open(args.save_thresholds, "w") as f:
-            json.dump({"thresholds": ths.tolist()}, f, indent=2)
-        print("[OK] saved per-class thresholds ->", args.save_thresholds)
+    # 임계값 결정: 로드가 있으면 사용, 없으면 현재 split에서 계산
+    if args.load_thresholds is not None:
+        ths = load_threshold_list(args.load_thresholds, n_classes)
+        msg_th = f"[LOADED thresholds] {os.path.basename(args.load_thresholds)}"
     else:
-        ths = np.full((probs.shape[1],), 0.5, dtype=np.float32)
-        if os.path.exists(args.save_thresholds):
-            ths = np.array(json.load(open(args.save_thresholds))["thresholds"], dtype=np.float32)
-            print("[OK] loaded thresholds from", args.save_thresholds)
+        ths = optimal_thresholds(probs, targs, steps=100)
+        msg_th = "[OPTIMIZED thresholds on current split]"
+        if args.save_thresholds:
+            save_threshold_list(args.save_thresholds, ths)
 
     preds = (probs >= ths[None, :]).astype(int)
     f1m = f1_score(targs, preds, average="macro", zero_division=0)
 
-    # --- ECE + Reliability (multilabel; pos-rate 기반) ---
-    ece, confs, pos_rates = multilabel_ece(probs, targs, bins=args.bins, quantile=args.quantilebins)
+    xs, ys, ns, edges = reliability_points(
+        probs, targs, bins=args.bins, quantile=args.quantilebins
+    )
+    ece = ece_from_points(xs, ys, ns, total=probs.size)
 
+    alias = os.path.basename(os.path.dirname(args.ckpt))
+    fig_out = f"results/reliability_{alias}_{args.split}.png"
+    os.makedirs("results", exist_ok=True)
+
+    # Plot
+    plt.figure(figsize=(4, 4))
+    plt.plot([0, 1], [0, 1], "--")
+    plt.plot(xs, ys, marker="o")
+    plt.xlabel("Confidence")
+    plt.ylabel("Empirical Positive Rate")
+    plt.title(f"Reliability ({args.split})")
+    plt.tight_layout()
+    plt.savefig(fig_out, dpi=200)
+
+    if args.quantilebins:
+        qs = np.linspace(0, 1, args.bins + 1)
+        qvals = np.quantile(probs.flatten(), qs).round(3).tolist()
+        print(f"[Probs quantiles] {qvals} (N={probs.size})")
+
+    print(f"{msg_th}")
     print(f"[SPLIT] {args.split} | F1_macro@per-class-th = {f1m:.4f} | ECE = {ece:.4f}")
-    print("Per-class thresholds:", np.round(ths, 3).tolist())
-
-    outp = f"results/reliability_{args.split}.png"
-    reliability_plot(confs, pos_rates, f"Reliability ({args.split})", outp)
-
-    # 분포 요약(디버깅용)
-    flat = probs.flatten()
-    qs = np.quantile(flat, [0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1.0])
-    print("[Probs quantiles]", np.round(qs, 3).tolist(), f"(N={flat.size})")
+    print(f"Per-class thresholds: {np.round(ths, 3).tolist()}")
+    print(f"[OK] saved {fig_out}")
 
 if __name__ == "__main__":
     main()
