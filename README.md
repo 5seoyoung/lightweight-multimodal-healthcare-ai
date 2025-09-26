@@ -1,121 +1,52 @@
-# lightweight-multimodal-healthcare-ai
-Efficient multimodal transformers for clinical decision support (AAAI-UC Research)
+# Lightweight Multimodal Healthcare AI
 
-# Lightweight Medical Imaging on Edge: Mobile Models + Knowledge Distillation (ChestMNIST)
+Efficient multimodal transformers for clinical decision support with operational thresholding and calibration.
 
-An open-source experimental repository that combines lightweight mobile architectures with knowledge distillation to simultaneously achieve **accuracy–efficiency–reproducibility** on **ChestMNIST**.
-All scripts follow **reproducible log/checkpoint/threshold formats**, and tables/figures are automatically generated from logs.
-
-> **Warning: Not for clinical use**: This code is for research and educational purposes. Clinical deployment requires separate IRB approval and field validation.
+**Warning**: This code is for research and educational purposes only. Clinical deployment requires separate IRB approval and field validation.
 
 ---
 
-## Research Overview (What & Why)
+## Research Overview
 
-Medical imaging classifiers in mobile/edge environments must satisfy not only **accuracy** requirements but also **latency and memory** constraints simultaneously. This repository establishes a **MobileNetV3-Small (≈1.53M)** baseline on ChestMNIST (multi-label 14-class) and provides experimental validation of whether **Knowledge Distillation (KD)** can actually improve **rare-class-focused AUPRC** within the same resource budget.
+Medical imaging classifiers in mobile/edge environments must satisfy **accuracy**, **latency**, and **memory** constraints simultaneously while maintaining **operational reliability**. This repository establishes reproducible baselines on ChestMNIST using **MobileNetV3-Small (≈1.53M parameters)** and investigates whether **Scheduled Knowledge Distillation (KD)** with **class weighting** can improve operational performance at per-class thresholds.
 
-**Core Questions**
-* Can KD actually surpass the baseline established by lightweight students through supervised learning alone?
-* If not, what are the bottlenecks? And what combinations (scheduling, class weighting, feature distillation, calibration) are needed?
+### Core Research Questions
 
-## Methodology Summary (How)
+* Can scheduled KD with class weighting surpass supervised learning baselines when evaluated at **operational thresholds**?
+* What combination of **CE→KD scheduling** and **inverse class weighting** achieves the best **F1_macro** and **ECE stability**?
+* How do we establish **reproducible benchmarks** with standardized threshold optimization and calibration procedures?
 
-* **Student**: Fixed to MobileNetV3-Small (maintaining efficiency budget)
-* **Teacher**: ResNet-18 (cross-architecture) or MobileNetV3-Small (self-distillation)
-* **Loss**: Supervised learning (BCE/Focal/ASL) + Logit KD (KL, temperature τ) + Optional **feature distillation (Attention Transfer / FitNets-hint)**
-* **Scheduling**: Dynamic adjustment of **α (distillation weight) and τ (temperature)** by learning phase (KD→CE vs CE→KD)
-* **Decision Policy**: **Per-class threshold** optimization on validation set (or fixed 0.5) + **temperature scaling** with ECE reporting
-* **Reproducibility**: Same seed sets, standardized log/checkpoint/threshold files, automated table/figure generation scripts
+### Key Findings
 
-## Architecture Overview (Text Diagram)
-
-```
-Teacher (ResNet18 / MBV3) ── logits_t ─┐
-                                        │   KL(σ(z_t/τ) || σ(z_s/τ)) × α(t), τ(t)
-Input → Student (MBV3-Small) → logits_s ├─ + Supervised Loss (BCE/Focal/ASL)
-                                        │   + Feature Distillation (AT/Hint, λ_feat)
-                              ──> Sigmoid → Thresholding (per-class, val-tuned)
-```
-
-## Experimental Design
-
-* **Data**: ChestMNIST from MedMNIST official split; PneumoniaMNIST/OrganMNIST-A for external distribution check (**test-only**)
-* **Protocol**: Input 128/160, batch 64, 10–12 epochs, medical-friendly light augmentation
-* **Metrics**: 1) **macro-AUPRC** (primary), 2) macro-AUROC, 3) **macro-F1** (fixed/val-optimized thresholds), 4) **ECE** (15 bins)
-* **Efficiency**: Parameter count, FLOPs (128/160), batch-1 **latency (MPS/CPU)** 100-run average, **peak memory**
-* **Statistics**: N=3 (up to 5 if needed) seed mean±std (95% CI), Wilcoxon signed-rank + Cliff's δ
-
-## Key Findings
-
-* **Supervised Baseline (Student Only)** MobileNetV3-Small (128–160, 10–12ep, light aug): **AUPRC 0.173–0.175**, **AUROC 0.782–0.785**, **F1_macro 0.228–0.237** → Low inter-seed variation with high reproducibility.
-
-* **Initial KD Experiments (Same Protocol)**
-   1. ResNet-18 → MobileNetV3 (α=0.1, τ=5.0, 128): **AUPRC 0.157**, **F1_macro ≈0.181**
-   2. MobileNetV3 → MobileNetV3 (α=0.4, τ=3.0, 160): **AUPRC 0.170**, **F1_macro ≈0.208** 
-   → **Both failed to surpass baseline** (particularly evident in AUPRC).
-
-* **Why Did KD Lose? (Diagnosis)**
-   1. **Soft target dilution in imbalanced settings**: **Sparse positive precision signals weakened** by being pulled toward majority negatives
-   2. **Teacher-student architectural mismatch**: Difficult to bridge **representation distribution differences** between ResNet↔MobileNet with logits alone
-   3. **Static α/τ inadequacy**: **Imbalanced learning pressure** due to different supervision signal combinations needed in early/late phases
-
-## Our Proposed Solutions (Roadmap)
-
-* **α(t)/τ(t) Scheduling**: Compare KD→CE (early representation alignment, late boundary refinement) ↔ CE→KD (teacher priors injection after label fitting)
-* **Class-weighted KD**: Apply KD weights w_c to sparse classes (inverse frequency/Effective Number) → **protect rare-class AUPRC**
-* **Feature Distillation (AT/Hint)**: Intermediate representation matching to mitigate **architectural mismatch**
-* **Imbalance-aware Supervised Loss**: Focus on **hard examples and positive sparsity** with Focal/ASL/CB
-* **Threshold/Calibration**: Fix per-class thresholds on validation + temperature scaling (ECE reporting)
-
-**Target Metrics**: macro-AUPRC **≥ 0.185–0.195**, macro-F1 **≥ 0.245**, **parameters ≤ 2M**, latency/memory **within ±10%**
-
-## Our Contributions
-
-1. **Rigorous lightweight baseline establishment**: Established **reproducible** AUPRC/AUROC/F1 standards with MobileNetV3-Small
-2. **Valuable negative result reporting**: Demonstrated with data that **naive KD fails to beat AUPRC** within same budget
-3. **Practical diagnosis and prescription**: Why it lost (dilution·mismatch·static hyper) → **How to fix** (schedule/weight/feature/calibration)
-4. **Complete reproducibility package**: **Automated figure/table regeneration** with standard logs·checkpoints·thresholds·CLI·parsers·plotting scripts
+* **Scheduled KD (CE→KD + inverse weighting)** achieves **F1_macro 0.2315** vs supervised baseline **0.2230**
+* **Pre-trained student initialization** critical for KD convergence stability 
+* **Per-class threshold optimization** on validation set essential for fair operational comparison
+* All experiments reproducible with standardized seed/log/checkpoint protocols
 
 ---
 
-## Key Features
+## Methodology
 
-* **Lightweight baselines**: Establish ChestMNIST multi-label classification baselines with MobileNetV3-Small (≈1.53M)
-* **Knowledge Distillation (KD)**: Initial evaluation of ResNet-18→MobileNetV3, MobileNetV3→MobileNetV3 self-distillation
-* **Imbalance handling**: Multi-label standard **macro-AUPRC** / **macro-F1** (fixed & validation-optimized thresholds)
-* **Decision thresholds/calibration**: Validation-based per-class threshold search and ECE reporting (optional)
-* **Reproducibility package**: Standardized directory/log/checkpoint + automated table/curve generation scripts
-* **Efficiency measurement**: Parameter count/FLOPs/latency/peak memory profiling
-
----
-
-## Repository Structure
+### Architecture Overview
 
 ```
-lightweight-multimodal-healthcare-ai/
-├─ src/
-│  ├─ datasets/medmnist_loader.py      # MedMNIST loader (with augmentation)
-│  ├─ models/
-│  │  ├─ baseline_cnn.py               # timm backbone wrapper + linear head
-│  │  └─ distill.py                    # DistillLoss (multi-label/multi-class support)
-│  ├─ utils/
-│  │  ├─ thresholds.py                 # per-class F1-opt threshold search
-│  │  ├─ class_freq.py                 # pos_weight estimation
-│  │  └─ seed.py                       # seed fixing utilities
-│  ├─ train.py                         # supervised learning baseline
-│  ├─ distill_train.py                 # knowledge distillation training (with EMA)
-│  └─ cli.py                           # YAML-based batch executor
-├─ configs/                            # experiment templates (YAML)
-├─ scripts/
-│  ├─ make_tables.py                   # log→table CSV
-│  ├─ plot_curves.py                   # run.log → training curves
-│  └─ profile_efficiency.py            # efficiency measurement
-├─ results/                            # (auto-generated) checkpoints/logs/tables/figures
-├─ tests/                              # unit tests
-├─ docs/REPRODUCIBILITY.md             # reproduction guide
-├─ requirements.txt
-└─ README.md
+Teacher (ResNet-18) ──── logits_t ─┐
+                                   │ KL(σ(z_t/τ) || σ(z_s/τ)) × α(t)
+Input → Student (MobileNetV3) ─── logits_s ├─ + BCE Loss
+                                   │ + Class Weights (inverse/effective)
+                         ────> Per-class Thresholding (val-optimized)
 ```
+
+### Experimental Protocol
+
+* **Data**: ChestMNIST (14 multi-labels), official train/val/test split
+* **Input**: 128×128, batch_size=64, epochs=12
+* **Optimizer**: AdamW (lr=3e-4, weight_decay=1e-4)
+* **Scheduling**: CE→KD (α: 0.1→0.7, τ: 2.0→5.0 over epochs)
+* **Class Weighting**: inverse frequency for sparse positive classes
+* **Threshold Policy**: Per-class F1 maximization on validation → fixed test application
+* **Calibration**: ECE (10-bin), reliability plots
+* **Reproducibility**: Seeds [0,1,2], automated log/checkpoint/metric standardization
 
 ---
 
@@ -123,283 +54,372 @@ lightweight-multimodal-healthcare-ai/
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate     # Windows: .venv\Scripts\activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Optional: Environment freezing
+### Requirements
 
-```bash
-pip freeze > docs/env_freeze.txt
+```txt
+torch>=2.0.0
+torchvision>=0.15.0
+timm>=0.9.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+medmnist>=2.2.0
 ```
-
----
-
-## Dataset
-
-* Default: **ChestMNIST** (MedMNIST) – automatically downloaded on first run
-* Optional: PneumoniaMNIST, OrganMNIST A – for external validation (test-only)
-* Change cache path (optional):
-  `export MEDMNIST_CACHE=./data/medmnist_cache`
 
 ---
 
 ## Quick Start
 
-### 1) Supervised Learning Baseline (MobileNetV3-Small)
+### 1. Supervised Baseline (MobileNetV3-Small)
 
 ```bash
-# Resolution 128
-python -m src.train \
-  --dataset chestmnist \
+# Single run
+python scripts/train.py \
+  --data_root data/chestmnist \
   --img_size 128 \
   --batch_size 64 \
   --epochs 12 \
+  --optimizer adamw \
   --lr 3e-4 \
-  --backbone mobilenetv3_small_100 \
-  --aug light \
-  --outdir results
-
-# Resolution 160
-python -m src.train \
-  --dataset chestmnist \
-  --img_size 160 \
-  --batch_size 64 \
-  --epochs 12 \
-  --lr 3e-4 \
-  --backbone mobilenetv3_small_100 \
-  --aug light \
-  --outdir results
+  --weight_decay 1e-4 \
+  --arch mobilenetv3_small_100 \
+  --pretrained True \
+  --seed 0 \
+  --loss bce \
+  --save_dir runs \
+  --run_name student_mbv3_sup_s0
 ```
 
-Output
-
-* Checkpoint: `results/checkpoints/chestmnist_mobilenetv3_small_100.pt`
-* Test results: `results/logs/chestmnist_mobilenetv3_small_100_test.json`
-* Console JSONL: Per-epoch `val_auprc`, `val_f1_macro(_opt)`, `thresholds`, `sec` records
-
-### 2) Knowledge Distillation (Initial Setup Reproduction)
-
-ResNet-18 → MobileNetV3-Small (input 128, α=0.1, τ=5.0)
+### 2. Teacher Training (ResNet-18)
 
 ```bash
-python -m src.distill_train \
-  --dataset chestmnist \
+python scripts/train.py \
+  --data_root data/chestmnist \
   --img_size 128 \
   --batch_size 64 \
   --epochs 12 \
+  --optimizer adamw \
   --lr 3e-4 \
-  --teacher_backbone resnet18 \
-  --student_backbone mobilenetv3_small_100 \
-  --alpha 0.1 \
-  --tau 5.0 \
-  --selection_metric auprc \
-  --outdir results
+  --weight_decay 1e-4 \
+  --arch resnet18 \
+  --pretrained False \
+  --seed 0 \
+  --loss bce \
+  --save_dir runs \
+  --run_name teacher_resnet18_s0
 ```
 
-MobileNetV3-Small → MobileNetV3-Small (input 160, α=0.4, τ=3.0)
+### 3. Knowledge Distillation (Recommended: CE→KD + Inverse)
 
 ```bash
-python -m src.distill_train \
-  --dataset chestmnist \
-  --img_size 160 \
+python scripts/train_distill.py \
+  --data_root data/chestmnist \
+  --img_size 128 \
   --batch_size 64 \
   --epochs 12 \
+  --optimizer adamw \
   --lr 3e-4 \
-  --teacher_backbone mobilenetv3_small_100 \
-  --student_backbone mobilenetv3_small_100 \
-  --alpha 0.4 \
-  --tau 3.0 \
-  --selection_metric auprc \
-  --outdir results
+  --weight_decay 1e-4 \
+  --teacher_arch resnet18 \
+  --teacher_ckpt runs/teacher_resnet18_s0/best.pt \
+  --student_arch mobilenetv3_small_100 \
+  --student_pretrained True \
+  --kd_schedule ce2kd \
+  --kd_class_weight inverse \
+  --alpha_start 0.1 \
+  --alpha_end 0.7 \
+  --temp_start 2.0 \
+  --temp_end 5.0 \
+  --seed 0 \
+  --save_dir runs \
+  --run_name distill_ce2kd_inverse_s0
 ```
 
-Output
-
-* Checkpoint: `results/checkpoints/distill_{dataset}_{teacher}_to_{student}.pt`
-* Validation thresholds: `results/logs/distill_*_val_thresholds.json`
-* Test results: `results/logs/distill_*_test.json`
-
----
-
-## Multi-seed Runs (Batch)
-
-### CLI + YAML
+### 4. Threshold Optimization & Calibration
 
 ```bash
-# Run 3 times
-python -m src.cli --config configs/baseline_chestmnist_128.yaml --runs 3
-```
+# Find optimal per-class thresholds on validation
+python scripts/calibration_and_thresholds.py \
+  --ckpt runs/distill_ce2kd_inverse_s0/best.pt \
+  --arch mobilenetv3_small_100 \
+  --data_root data/chestmnist \
+  --split val \
+  --optimize_per_class_f1 \
+  --save_thresholds
 
-Example `configs/baseline_chestmnist_128.yaml`
-
-```yaml
-name: "baseline_chestmnist_128"
-script: "src.train"
-args:
-  dataset: "chestmnist"
-  img_size: 128
-  batch_size: 64
-  epochs: 12
-  lr: 3e-4
-  backbone: "mobilenetv3_small_100"
-  aug: "light"
-  outdir: "results"
-```
-
----
-
-## Results/Log/Checkpoint Format
-
-* Standard console (JSONL) line example
-
-```json
-{"epoch": 10, "train_loss": 0.241, "val_loss": 0.226,
- "val_auroc": 0.784, "val_auprc": 0.174, "val_f1_macro": 0.233,
- "val_f1_macro_opt": 0.246, "thresholds": [0.12, 0.63, ...], "sec": 41.3}
-```
-
-* Test results (JSON)
-
-```json
-{"loss": 0.232, "auroc": 0.7842, "auprc": 0.1746, "f1_macro": 0.2351}
-```
-
-Directory conventions
-
-```
-results/
-  checkpoints/                     # *.pt
-  logs/                            # *_test.json, *_val_thresholds.json
-  seed_runs/                       # per-seed run.log (recommended to save with tee)
-  thresholds/                      # backup if needed
-  summary/runs.csv                 # generated by table scripts
-  figures/                         # curves/plots
+# Apply thresholds to test set
+python scripts/calibration_and_thresholds.py \
+  --ckpt runs/distill_ce2kd_inverse_s0/best.pt \
+  --arch mobilenetv3_small_100 \
+  --data_root data/chestmnist \
+  --split test \
+  --load_thresholds
 ```
 
 ---
 
-## Table & Figure Generation
+## Multi-Seed Reproducible Runs
 
-Table summary
+### Batch Training Script
 
 ```bash
-python scripts/make_tables.py \
-  --logs_glob "results/logs/*test.json" \
-  --seeds_glob "results/seed_runs/**/seed_*.log" \
-  --out_csv "results/summary/runs.csv"
+#!/bin/bash
+COMMON="--data_root data/chestmnist --img_size 128 --batch_size 64 --epochs 12 \
+        --optimizer adamw --lr 3e-4 --weight_decay 1e-4 --save_dir runs"
+
+SEEDS="0 1 2"
+
+# Teacher training
+for s in $SEEDS; do
+  python scripts/train.py $COMMON --arch resnet18 --pretrained False --seed $s \
+    --loss bce --run_name teacher_resnet18_s${s}
+done
+
+# Student supervised baseline
+for s in $SEEDS; do
+  python scripts/train.py $COMMON --arch mobilenetv3_small_100 --pretrained True --seed $s \
+    --loss bce --run_name student_mbv3_sup_s${s}
+done
+
+# Knowledge Distillation (CE→KD + Inverse)
+for s in $SEEDS; do
+  python scripts/train_distill.py $COMMON \
+    --teacher_arch resnet18 --teacher_ckpt runs/teacher_resnet18_s${s}/best.pt \
+    --student_arch mobilenetv3_small_100 --student_pretrained True \
+    --kd_schedule ce2kd --kd_class_weight inverse \
+    --alpha_start 0.1 --alpha_end 0.7 --temp_start 2.0 --temp_end 5.0 \
+    --seed $s --run_name distill_ce2kd_inverse_s${s}
+done
+
+# Threshold optimization for all runs
+for RUN in runs/*_s*; do
+  python scripts/calibration_and_thresholds.py \
+    --ckpt ${RUN}/best.pt --arch_from_run ${RUN} \
+    --split val --optimize_per_class_f1 --save_thresholds
+  python scripts/calibration_and_thresholds.py \
+    --ckpt ${RUN}/best.pt --arch_from_run ${RUN} \
+    --split test --load_thresholds
+done
 ```
 
-Training curves
+---
+
+## Results Summary
+
+### Performance Comparison (ChestMNIST 128×128, Seeds 0-2 Average)
+
+| Method | Pretrained | Schedule/Weighting | Test AUROC | Test AUPRC | Test F1_macro* | ECE | Notes |
+|--------|------------|-------------------|------------|------------|----------------|-----|--------|
+| **Teacher ResNet-18** | ✗ | – | **0.7776** | **0.1683** | **0.2261** | 0.0050 | Reference baseline |
+| **Student MobileNetV3** | ✓ | – | 0.7761 | 0.1673 | 0.2230 | TBD | Supervised baseline |
+| KD: KD→CE + Effective | ✓ | kd2ce/effective | 0.7773 | 0.1665 | 0.2220 | TBD | Teacher-level AUROC |
+| **KD: CE→KD + Inverse** | ✓ | **ce2kd/inverse** | 0.7780 | 0.1678 | **0.2315** | TBD | **Best F1_macro** |
+| KD: CE→KD + None | ✓ | ce2kd/none | 0.7787 | **0.1697** | 0.2254 | TBD | Highest AUPRC |
+
+*F1_macro computed with per-class validation-optimized thresholds
+
+### Key Insights
+
+1. **Pre-trained student initialization** essential for KD stability
+2. **CE→KD scheduling** outperforms KD→CE for operational metrics  
+3. **Inverse class weighting** provides best F1_macro for imbalanced multi-label
+4. **Threshold optimization** critical for fair operational comparison
+
+---
+
+## Repository Structure
+
+```
+lightweight-multimodal-healthcare-ai/
+├── scripts/
+│   ├── train.py                    # Supervised learning
+│   ├── train_distill.py           # Knowledge distillation
+│   ├── calibration_and_thresholds.py  # Threshold optimization & ECE
+│   ├── aggregate.py               # Multi-seed result aggregation
+│   └── profile_efficiency.py     # Params/FLOPs/latency profiling
+├── src/
+│   ├── models/
+│   │   ├── baseline_cnn.py        # Backbone + classifier head
+│   │   ├── distill.py             # Multi-label KD loss
+│   │   └── medvae.py              # VAE for latent experiments
+│   ├── data/
+│   │   └── medmnist_loader.py     # ChestMNIST dataloader
+│   ├── utils/
+│   │   ├── thresholds.py          # Per-class F1 optimization
+│   │   ├── calibration.py         # ECE computation
+│   │   └── reproducibility.py    # Seed fixing utilities
+│   └── config/
+│       └── default_configs.py    # Experiment templates
+├── results/                       # Auto-generated outputs
+│   ├── checkpoints/              # Model weights (.pt)
+│   ├── logs/                     # Metrics & thresholds (.json)
+│   ├── figures/                  # Training curves & plots
+│   └── summary/                  # Aggregated tables (.csv)
+├── tests/                        # Unit tests
+├── docs/
+│   └── REPRODUCIBILITY.md       # Detailed reproduction guide
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Result Analysis & Visualization
+
+### Generate Summary Tables
+
+```bash
+python scripts/aggregate.py \
+  --runs "runs/*_s*" \
+  --metrics auroc auprc f1_macro ece \
+  --by test \
+  --save results/summary/performance.csv
+```
+
+### Training Curves
 
 ```bash
 python scripts/plot_curves.py \
-  --runlog "results/seed_runs/kd_r18_to_mbv3_128_a01_t5_e12/run.log" \
-  --outdir "results/figures"
+  --runlog runs/distill_ce2kd_inverse_s0/run.log \
+  --outdir results/figures \
+  --metrics val_auroc val_auprc val_f1_macro
 ```
 
-Efficiency (Params/FLOPs/Latency/PeakMem)
+### Efficiency Profiling
 
 ```bash
 python scripts/profile_efficiency.py \
-  --backbone mobilenetv3_small_100 \
+  --arch mobilenetv3_small_100 \
   --img_size 128 \
-  --device mps,cpu \
+  --device cpu,mps \
   --runs 100 \
-  --out_csv results/summary/efficiency_mbv3_128.csv
+  --out results/summary/efficiency.csv
 ```
 
-Detailed procedures in `docs/REPRODUCIBILITY.md`.
+---
+
+## Calibration & Reliability
+
+### ECE Computation
+Expected Calibration Error measures confidence-accuracy alignment:
+- **Lower ECE** = better calibration
+- Computed using 10-bin reliability diagram
+- Temperature scaling available for post-hoc calibration
+
+### Threshold Optimization
+Per-class F1 maximization on validation set:
+- Searches optimal threshold per class independently  
+- Applies fixed thresholds to test set for fair comparison
+- Essential for operational deployment scenarios
 
 ---
 
-## Expected Reproduction Numbers (ChestMNIST)
+## Expected Reproduction Numbers
 
-* **Supervised MobileNetV3-Small** (128–160, 10–12 ep, light aug)
-  AUPRC **0.173–0.175**, AUROC **0.782–0.785**, F1_macro **0.228–0.237**
-* **KD: ResNet-18 → MobileNetV3** (α=0.1, τ=5.0, 128)
-  AUPRC ≈ **0.157**, F1_macro ≈ **0.181**
-* **Self-distill: MobileNetV3 → MobileNetV3** (α=0.4, τ=3.0, 160)
-  AUPRC ≈ **0.170**, F1_macro ≈ **0.208**
+With fixed seeds [0,1,2] on ChestMNIST 128×128:
 
-> Reported as mean±std and 95% CI, with ±0.002 variation possible due to hardware/backend (MPS/CPU/CUDA) differences.
+* **Supervised MobileNetV3-Small**: AUROC 0.776±0.002, AUPRC 0.167±0.001, F1_macro 0.223±0.003
+* **Teacher ResNet-18**: AUROC 0.778±0.003, AUPRC 0.168±0.002, F1_macro 0.226±0.004  
+* **KD CE→KD + Inverse**: AUROC 0.778±0.002, AUPRC 0.168±0.001, F1_macro **0.232±0.003**
+
+Small variations (±0.002) possible due to hardware differences (MPS/CPU/CUDA).
 
 ---
 
-## Reproduction Checkpoints (Quick Review)
+## Advanced Features
 
-* Run baseline (128/160) → Results: `results/logs/chestmnist_*_test.json`
-* Run 2 initial KD settings → Compare results: baseline vs KD
-* Generate table CSV with `scripts/make_tables.py`, regenerate training curves with `scripts/plot_curves.py`
-* Measure Params/FLOPs/Latency/PeakMem with `scripts/profile_efficiency.py`
+### Scheduled Knowledge Distillation
+- **CE→KD**: Early label learning → late teacher knowledge transfer
+- **KD→CE**: Early soft targets → late hard label focus
+- Dynamic α(t) and τ(t) scheduling over training epochs
 
-## Limitations and Future Plans
+### Class-Weighted KD  
+- **Inverse**: Weight = 1 / class_frequency (emphasizes rare classes)
+- **Effective**: Weight = (1-β)/(1-β^n) where n = samples per class
+- **None**: Uniform weighting across all classes
 
-* MedMNIST is a **low-resolution benchmark** that doesn't replace the complexity of clinical source data
-* External distribution evaluation is **test-only small-scale**, not covering institutional/equipment/demographic variations
-* Next steps: **Scheduled KD + class weighting + feature distillation** combined ablation, **quantitative significance testing**, additional latency reduction with **quantization/sparsification**, **multimodal expansion** and **explainability** analysis
+### Multi-Label Calibration
+- Per-class sigmoid calibration with ECE reporting
+- Reliability plots for confidence-accuracy visualization
+- Temperature scaling for post-hoc calibration improvement
 
 ---
 
 ## Testing
 
 ```bash
-pytest -q
-# or
-python -m pytest -q
+# Run unit tests
+pytest tests/ -v
+
+# Test specific components
+pytest tests/test_thresholds.py -v
+pytest tests/test_calibration.py -v
 ```
-
-Included tests
-
-* `tests/test_thresholds.py`: per-class F1-opt threshold search validation
-* `tests/test_class_freq.py`: pos_weight (neg/pos) estimation validation
 
 ---
 
-## Tips & Common Issues
+## Common Issues & Solutions
 
-* There may be numerical differences between MPS/CPU/CUDA, so report average/CI with multiple seeds.
-* First run may require downloading `timm` pretrained weights.
-* If MedMNIST is blocked in proxy/firewall environments, set `MEDMNIST_CACHE` to local path.
+### CUDA/MPS Compatibility
+- Use `--amp` flag carefully with MPS (may cause instability)
+- Set `PYTORCH_ENABLE_MPS_FALLBACK=1` for MPS compatibility
+- CPU fallback available for all operations
+
+### Checkpoint Loading
+- Ensure architecture matches between training and evaluation
+- Handle prefix mismatches (e.g., `student.`, `module.`)
+- Use `strict=False` loading with shape verification
+
+### Memory Management
+- Reduce batch size if OOM (try 32 or 16)
+- Use gradient accumulation for effective larger batches
+- Monitor peak memory usage with profiling scripts
 
 ---
 
-## Citation
+## Contributing
 
-If you use this repository in research or reports, please cite:
+1. Follow existing code structure and naming conventions
+2. Add unit tests for new features
+3. Update documentation for API changes
+4. Maintain reproducibility with seed fixing
+5. Use standardized logging format (JSON lines)
 
-```
-@misc{lightweight-medai-2025,
-  title  = {Lightweight Mobile Architectures and Knowledge Distillation for ChestMNIST},
-  author = {Anonymous},
-  year   = {2025},
-  note   = {GitHub repository},
-  howpublished = {\url{https://example.com/anon-repo}}  % Use anonymous link during review
-}
-```
+---
 
-Related data/libraries
-
-* MedMNIST: Yang et al., 2021
-* MobileNetV3: Howard et al., 2019
-* Knowledge Distillation: Hinton et al., 2015
-* FitNets: Romero et al., 2015
-* Attention Transfer: Zagoruyko & Komodakis, 2017
-* timm: Wightman, 2019–
+**Related Work:**
+- MedMNIST: Yang et al., 2021
+- MobileNetV3: Howard et al., 2019  
+- Knowledge Distillation: Hinton et al., 2015
+- timm: Wightman et al., 2019
 
 ---
 
 ## License
 
-Check the `LICENSE` file for this repository's license. Some external models/data follow their respective licenses.
+See LICENSE file for details. External models and datasets follow their respective licenses.
 
 ---
 
-## Responsible Use
+## Responsible AI
 
-* Purpose: Decision-making **assistance**
-* Risks: False positives/negatives, distribution shift, calibration errors
-* Requirements: Independent validation, site/equipment diversity, human-in-the-loop, auditable logging
+**Purpose**: Research tool for decision support assistance, not autonomous diagnosis.
 
----
+**Limitations**: 
+- Trained on limited dataset (ChestMNIST) 
+- May not generalize to different populations/equipment
+- Requires validation on institutional data before deployment
+
+**Clinical Deployment Requirements**:
+- Independent validation on local data
+- Human-in-the-loop verification
+- Conservative threshold setting
+- Continuous monitoring and auditing
+- Rollback procedures for model failures
+
+**Ethics**: This research aims to improve healthcare accessibility through efficient AI, but clinical deployment requires careful consideration of bias, fairness, and patient safety.
