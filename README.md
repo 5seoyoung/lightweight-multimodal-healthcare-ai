@@ -1,27 +1,29 @@
-# Lightweight Multimodal Healthcare AI
+# Lightweight Medical Imaging on Edge: MobileNetV3 + Knowledge Distillation (ChestMNIST)
 
-Efficient multimodal transformers for clinical decision support with operational thresholding and calibration.
+Operational thresholding and calibration for lightweight CNNs on ChestMNIST.
 
 **Warning**: This code is for research and educational purposes only. Clinical deployment requires separate IRB approval and field validation.
+
+> Note: Although the repository name refers to “multimodal,” **this release focuses on single-modal medical imaging (ChestMNIST)**. Multimodal extensions are on the roadmap.
 
 ---
 
 ## Research Overview
 
-Medical imaging classifiers in mobile/edge environments must satisfy **accuracy**, **latency**, and **memory** constraints simultaneously while maintaining **operational reliability**. This repository establishes reproducible baselines on ChestMNIST using **MobileNetV3-Small (≈1.53M parameters)** and investigates whether **Scheduled Knowledge Distillation (KD)** with **class weighting** can improve operational performance at per-class thresholds.
+Medical imaging classifiers in mobile/edge environments must satisfy **accuracy**, **latency**, and **memory** constraints simultaneously while maintaining **operational reliability**. This repository establishes reproducible baselines on ChestMNIST using **MobileNetV3-Small (≈1.53M parameters)** and investigates whether **scheduled Knowledge Distillation (KD)** with **class weighting** can improve operational performance at per-class thresholds.
 
 ### Core Research Questions
 
-* Can scheduled KD with class weighting surpass supervised learning baselines when evaluated at **operational thresholds**?
-* What combination of **CE→KD scheduling** and **inverse class weighting** achieves the best **F1_macro** and **ECE stability**?
-* How do we establish **reproducible benchmarks** with standardized threshold optimization and calibration procedures?
+* Can scheduled KD with class weighting surpass supervised baselines when evaluated at **operational thresholds**?
+* Which combination of **CE→KD scheduling** and **inverse class weighting** yields the best **F1_macro** and **ECE stability**?
+* How do we establish **reproducible benchmarks** with standardized threshold optimization and calibration?
 
 ### Key Findings
 
 * **Scheduled KD (CE→KD + inverse weighting)** achieves **F1_macro 0.2315** vs supervised baseline **0.2230**
-* **Pre-trained student initialization** critical for KD convergence stability 
-* **Per-class threshold optimization** on validation set essential for fair operational comparison
-* All experiments reproducible with standardized seed/log/checkpoint protocols
+* **Pre-trained student initialization** is critical for KD convergence stability
+* **Per-class threshold optimization** on validation is essential for fair operational comparison
+* All experiments are reproducible via standardized seed/log/checkpoint protocols
 
 ---
 
@@ -30,11 +32,11 @@ Medical imaging classifiers in mobile/edge environments must satisfy **accuracy*
 ### Architecture Overview
 
 ```
-Teacher (ResNet-18) ──── logits_t ─┐
-                                   │ KL(σ(z_t/τ) || σ(z_s/τ)) × α(t)
-Input → Student (MobileNetV3) ─── logits_s ├─ + BCE Loss
-                                   │ + Class Weights (inverse/effective)
-                         ────> Per-class Thresholding (val-optimized)
+Teacher (ResNet-18 or MobileNetV3) ── logits_t ─┐
+                                                │  KL(σ(z_t/τ) || σ(z_s/τ)) × α(t)
+Input → Student (MobileNetV3-Small) → logits_s ├── + BCE Loss
+                                                │  + Class Weights (inverse/effective)
+                                   ──> Per-class Thresholding (val-optimized)
 ```
 
 ### Experimental Protocol
@@ -43,10 +45,10 @@ Input → Student (MobileNetV3) ─── logits_s ├─ + BCE Loss
 * **Input**: 128×128, batch_size=64, epochs=12
 * **Optimizer**: AdamW (lr=3e-4, weight_decay=1e-4)
 * **Scheduling**: CE→KD (α: 0.1→0.7, τ: 2.0→5.0 over epochs)
-* **Class Weighting**: inverse frequency for sparse positive classes
-* **Threshold Policy**: Per-class F1 maximization on validation → fixed test application
+* **Class Weighting**: inverse frequency for sparse positives
+* **Threshold Policy**: maximize per-class F1 on validation → fix thresholds for test
 * **Calibration**: ECE (10-bin), reliability plots
-* **Reproducibility**: Seeds [0,1,2], automated log/checkpoint/metric standardization
+* **Reproducibility**: seeds [0,1,2], standardized logs/checkpoints/metrics
 
 ---
 
@@ -59,26 +61,30 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### Requirements
+### Requirements (pinned for reproducibility)
 
 ```txt
-torch>=2.0.0
-torchvision>=0.15.0
-timm>=0.9.0
-scikit-learn>=1.3.0
-pandas>=2.0.0
-matplotlib>=3.7.0
-medmnist>=2.2.0
+torch==2.3.1
+torchvision==0.18.1
+timm==0.9.16
+numpy==1.26.4
+scikit-learn==1.4.2
+pandas==2.2.2
+matplotlib==3.8.4
+medmnist==3.0.1
+tqdm==4.66.4
+pyyaml==6.0.1
 ```
+
+> CUDA users: install PyTorch from the official CUDA wheel index appropriate for your system.
 
 ---
 
 ## Quick Start
 
-### 1. Supervised Baseline (MobileNetV3-Small)
+### 1) Supervised Baseline (MobileNetV3-Small)
 
 ```bash
-# Single run
 python scripts/train.py \
   --data_root data/chestmnist \
   --img_size 128 \
@@ -95,7 +101,7 @@ python scripts/train.py \
   --run_name student_mbv3_sup_s0
 ```
 
-### 2. Teacher Training (ResNet-18)
+### 2) Teacher Training (ResNet-18)
 
 ```bash
 python scripts/train.py \
@@ -114,7 +120,7 @@ python scripts/train.py \
   --run_name teacher_resnet18_s0
 ```
 
-### 3. Knowledge Distillation (Recommended: CE→KD + Inverse)
+### 3) Knowledge Distillation (Recommended: CE→KD + Inverse)
 
 ```bash
 python scripts/train_distill.py \
@@ -140,32 +146,32 @@ python scripts/train_distill.py \
   --run_name distill_ce2kd_inverse_s0
 ```
 
-### 4. Threshold Optimization & Calibration
+### 4) Threshold Optimization & Calibration
 
 ```bash
-# Find optimal per-class thresholds on validation
+# Find optimal per-class thresholds on validation and compute ECE (10 bins)
 python scripts/calibration_and_thresholds.py \
   --ckpt runs/distill_ce2kd_inverse_s0/best.pt \
-  --arch mobilenetv3_small_100 \
+  --arch_from_run runs/distill_ce2kd_inverse_s0 \
   --data_root data/chestmnist \
   --split val \
   --optimize_per_class_f1 \
+  --ece_bins 10 \
   --save_thresholds
 
-# Apply thresholds to test set
+# Apply fixed thresholds to the test set
 python scripts/calibration_and_thresholds.py \
   --ckpt runs/distill_ce2kd_inverse_s0/best.pt \
-  --arch mobilenetv3_small_100 \
+  --arch_from_run runs/distill_ce2kd_inverse_s0 \
   --data_root data/chestmnist \
   --split test \
-  --load_thresholds
+  --load_thresholds \
+  --ece_bins 10
 ```
 
 ---
 
 ## Multi-Seed Reproducible Runs
-
-### Batch Training Script
 
 ```bash
 #!/bin/bash
@@ -174,7 +180,7 @@ COMMON="--data_root data/chestmnist --img_size 128 --batch_size 64 --epochs 12 \
 
 SEEDS="0 1 2"
 
-# Teacher training
+# Teacher
 for s in $SEEDS; do
   python scripts/train.py $COMMON --arch resnet18 --pretrained False --seed $s \
     --loss bce --run_name teacher_resnet18_s${s}
@@ -196,14 +202,14 @@ for s in $SEEDS; do
     --seed $s --run_name distill_ce2kd_inverse_s${s}
 done
 
-# Threshold optimization for all runs
+# Thresholds & ECE for all runs (val → test with fixed thresholds)
 for RUN in runs/*_s*; do
   python scripts/calibration_and_thresholds.py \
     --ckpt ${RUN}/best.pt --arch_from_run ${RUN} \
-    --split val --optimize_per_class_f1 --save_thresholds
+    --split val --optimize_per_class_f1 --ece_bins 10 --save_thresholds
   python scripts/calibration_and_thresholds.py \
     --ckpt ${RUN}/best.pt --arch_from_run ${RUN} \
-    --split test --load_thresholds
+    --split test --load_thresholds --ece_bins 10
 done
 ```
 
@@ -211,24 +217,25 @@ done
 
 ## Results Summary
 
-### Performance Comparison (ChestMNIST 128×128, Seeds 0-2 Average)
+### Performance Comparison (ChestMNIST 128×128, **Representative run (seed=0)**)
 
-| Method | Pretrained | Schedule/Weighting | Test AUROC | Test AUPRC | Test F1_macro* | ECE | Notes |
-|--------|------------|-------------------|------------|------------|----------------|-----|--------|
-| **Teacher ResNet-18** | ✗ | – | **0.7776** | **0.1683** | **0.2261** | 0.0050 | Reference baseline |
-| **Student MobileNetV3** | ✓ | – | 0.7761 | 0.1673 | 0.2230 | TBD | Supervised baseline |
-| KD: KD→CE + Effective | ✓ | kd2ce/effective | 0.7773 | 0.1665 | 0.2220 | TBD | Teacher-level AUROC |
-| **KD: CE→KD + Inverse** | ✓ | **ce2kd/inverse** | 0.7780 | 0.1678 | **0.2315** | TBD | **Best F1_macro** |
-| KD: CE→KD + None | ✓ | ce2kd/none | 0.7787 | **0.1697** | 0.2254 | TBD | Highest AUPRC |
+| Method                  | Pretrained | Schedule/Weighting | Test AUROC | Test AUPRC | Test F1_macro* | ECE | Notes               |
+| ----------------------- | ---------- | ------------------ | ---------: | ---------: | -------------: | --: | ------------------- |
+| **Teacher ResNet-18**   | ✗          | –                  | **0.7776** | **0.1683** |     **0.2261** | TBD | Reference baseline  |
+| **Student MobileNetV3** | ✓          | –                  |     0.7761 |     0.1673 |         0.2230 | TBD | Supervised baseline |
+| KD: KD→CE + Effective   | ✓          | kd2ce/effective    |     0.7773 |     0.1665 |         0.2220 | TBD | Teacher-level AUROC |
+| **KD: CE→KD + Inverse** | ✓          | **ce2kd/inverse**  |     0.7780 |     0.1678 |     **0.2315** | TBD | **Best F1_macro**   |
+| KD: CE→KD + None        | ✓          | ce2kd/none         |     0.7787 | **0.1697** |         0.2254 | TBD | Highest AUPRC       |
 
-*F1_macro computed with per-class validation-optimized thresholds
+*F1_macro computed with per-class validation-optimized thresholds.
+To report mean±std over seeds, run `scripts/aggregate.py` and replace this table accordingly.
 
 ### Key Insights
 
-1. **Pre-trained student initialization** essential for KD stability
-2. **CE→KD scheduling** outperforms KD→CE for operational metrics  
-3. **Inverse class weighting** provides best F1_macro for imbalanced multi-label
-4. **Threshold optimization** critical for fair operational comparison
+1. **Pre-trained student initialization** is essential for KD stability
+2. **CE→KD scheduling** outperforms KD→CE on operational metrics
+3. **Inverse class weighting** best improves F1_macro under imbalance
+4. **Per-class threshold optimization** is critical for fair comparison
 
 ---
 
@@ -237,32 +244,31 @@ done
 ```
 lightweight-multimodal-healthcare-ai/
 ├── scripts/
-│   ├── train.py                    # Supervised learning
-│   ├── train_distill.py           # Knowledge distillation
-│   ├── calibration_and_thresholds.py  # Threshold optimization & ECE
-│   ├── aggregate.py               # Multi-seed result aggregation
-│   └── profile_efficiency.py     # Params/FLOPs/latency profiling
+│   ├── train.py                      # Supervised training
+│   ├── train_distill.py              # Knowledge distillation
+│   ├── calibration_and_thresholds.py # Threshold search & ECE
+│   ├── aggregate.py                  # Multi-seed aggregation
+│   └── profile_efficiency.py         # Params/FLOPs/latency profiling
 ├── src/
 │   ├── models/
-│   │   ├── baseline_cnn.py        # Backbone + classifier head
-│   │   ├── distill.py             # Multi-label KD loss
-│   │   └── medvae.py              # VAE for latent experiments
+│   │   ├── baseline_cnn.py           # Backbone + classifier head
+│   │   └── distill.py                # Multi-label KD losses
 │   ├── data/
-│   │   └── medmnist_loader.py     # ChestMNIST dataloader
+│   │   └── medmnist_loader.py        # ChestMNIST dataloader
 │   ├── utils/
-│   │   ├── thresholds.py          # Per-class F1 optimization
-│   │   ├── calibration.py         # ECE computation
-│   │   └── reproducibility.py    # Seed fixing utilities
+│   │   ├── thresholds.py             # Per-class F1 threshold search
+│   │   ├── calibration.py            # ECE computation
+│   │   └── reproducibility.py        # Seed fixing utilities
 │   └── config/
-│       └── default_configs.py    # Experiment templates
-├── results/                       # Auto-generated outputs
-│   ├── checkpoints/              # Model weights (.pt)
-│   ├── logs/                     # Metrics & thresholds (.json)
-│   ├── figures/                  # Training curves & plots
-│   └── summary/                  # Aggregated tables (.csv)
-├── tests/                        # Unit tests
+│       └── default_configs.py        # Experiment templates
+├── results/                          # Auto-generated outputs
+│   ├── checkpoints/                  # .pt weights
+│   ├── logs/                         # metrics & thresholds (.json)
+│   ├── figures/                      # training curves & plots
+│   └── summary/                      # aggregated tables (.csv)
+├── tests/                            # Unit tests
 ├── docs/
-│   └── REPRODUCIBILITY.md       # Detailed reproduction guide
+│   └── REPRODUCIBILITY.md            # Detailed reproduction guide
 ├── requirements.txt
 └── README.md
 ```
@@ -271,7 +277,7 @@ lightweight-multimodal-healthcare-ai/
 
 ## Result Analysis & Visualization
 
-### Generate Summary Tables
+### Generate Summary Tables (mean±std over seeds)
 
 ```bash
 python scripts/aggregate.py \
@@ -305,17 +311,9 @@ python scripts/profile_efficiency.py \
 
 ## Calibration & Reliability
 
-### ECE Computation
-Expected Calibration Error measures confidence-accuracy alignment:
-- **Lower ECE** = better calibration
-- Computed using 10-bin reliability diagram
-- Temperature scaling available for post-hoc calibration
-
-### Threshold Optimization
-Per-class F1 maximization on validation set:
-- Searches optimal threshold per class independently  
-- Applies fixed thresholds to test set for fair comparison
-- Essential for operational deployment scenarios
+**Expected Calibration Error (ECE)** quantifies confidence–accuracy alignment: lower is better.
+We use a **10-bin** reliability diagram and optionally apply **temperature scaling** as a post-hoc calibration step.
+All reported thresholds are **fixed from validation** when evaluating on test.
 
 ---
 
@@ -324,102 +322,74 @@ Per-class F1 maximization on validation set:
 With fixed seeds [0,1,2] on ChestMNIST 128×128:
 
 * **Supervised MobileNetV3-Small**: AUROC 0.776±0.002, AUPRC 0.167±0.001, F1_macro 0.223±0.003
-* **Teacher ResNet-18**: AUROC 0.778±0.003, AUPRC 0.168±0.002, F1_macro 0.226±0.004  
+* **Teacher ResNet-18**: AUROC 0.778±0.003, AUPRC 0.168±0.002, F1_macro 0.226±0.004
 * **KD CE→KD + Inverse**: AUROC 0.778±0.002, AUPRC 0.168±0.001, F1_macro **0.232±0.003**
 
-Small variations (±0.002) possible due to hardware differences (MPS/CPU/CUDA).
-
----
-
-## Advanced Features
-
-### Scheduled Knowledge Distillation
-- **CE→KD**: Early label learning → late teacher knowledge transfer
-- **KD→CE**: Early soft targets → late hard label focus
-- Dynamic α(t) and τ(t) scheduling over training epochs
-
-### Class-Weighted KD  
-- **Inverse**: Weight = 1 / class_frequency (emphasizes rare classes)
-- **Effective**: Weight = (1-β)/(1-β^n) where n = samples per class
-- **None**: Uniform weighting across all classes
-
-### Multi-Label Calibration
-- Per-class sigmoid calibration with ECE reporting
-- Reliability plots for confidence-accuracy visualization
-- Temperature scaling for post-hoc calibration improvement
+Small variations (±0.002) may occur across MPS/CPU/CUDA backends.
 
 ---
 
 ## Testing
 
 ```bash
-# Run unit tests
 pytest tests/ -v
-
-# Test specific components
 pytest tests/test_thresholds.py -v
-pytest tests/test_calibration.py -v
+# Add tests/test_calibration.py if present; otherwise omit this line from CI.
 ```
 
 ---
 
 ## Common Issues & Solutions
 
-### CUDA/MPS Compatibility
-- Use `--amp` flag carefully with MPS (may cause instability)
-- Set `PYTORCH_ENABLE_MPS_FALLBACK=1` for MPS compatibility
-- CPU fallback available for all operations
+**CUDA/MPS**
 
-### Checkpoint Loading
-- Ensure architecture matches between training and evaluation
-- Handle prefix mismatches (e.g., `student.`, `module.`)
-- Use `strict=False` loading with shape verification
+* Use `--amp` cautiously on MPS; set `PYTORCH_ENABLE_MPS_FALLBACK=1` if needed
+* CPU fallback is supported for all operations
 
-### Memory Management
-- Reduce batch size if OOM (try 32 or 16)
-- Use gradient accumulation for effective larger batches
-- Monitor peak memory usage with profiling scripts
+**Checkpoint Loading**
+
+* Ensure the architecture matches the checkpoint
+* Handle prefix mismatches (e.g., `module.`, `student.`)
+* Use `strict=False` with shape checks for safe loading
+
+**Memory**
+
+* Reduce batch size (→32 or 16) on OOM
+* Consider gradient accumulation
+* Use the profiling script to monitor peak memory
 
 ---
 
 ## Contributing
 
-1. Follow existing code structure and naming conventions
+1. Follow code structure and naming conventions
 2. Add unit tests for new features
 3. Update documentation for API changes
-4. Maintain reproducibility with seed fixing
-5. Use standardized logging format (JSON lines)
+4. Keep seeds fixed for reproducibility
+5. Use standardized JSON-line logging
 
 ---
 
-**Related Work:**
-- MedMNIST: Yang et al., 2021
-- MobileNetV3: Howard et al., 2019  
-- Knowledge Distillation: Hinton et al., 2015
-- timm: Wightman et al., 2019
+## Related Work
+
+* MedMNIST: Yang et al., 2021
+* MobileNetV3: Howard et al., 2019
+* Knowledge Distillation: Hinton et al., 2015
+* timm: Wightman et al., 2019
 
 ---
 
 ## License
 
-See LICENSE file for details. External models and datasets follow their respective licenses.
+See the LICENSE file for details. External models and datasets follow their respective licenses.
 
 ---
 
 ## Responsible AI
 
-**Purpose**: Research tool for decision support assistance, not autonomous diagnosis.
+**Purpose**: Research tool for decision-support assistance, not autonomous diagnosis.
+**Limitations**: Trained on ChestMNIST; may not generalize to other populations/equipment.
+**Deployment Requirements**: Independent validation on local data, human-in-the-loop, conservative thresholds, continuous monitoring and auditing, and rollback procedures.
+**Ethics**: Improving access via efficient AI is valuable, but deployment requires careful consideration of bias, fairness, and patient safety.
 
-**Limitations**: 
-- Trained on limited dataset (ChestMNIST) 
-- May not generalize to different populations/equipment
-- Requires validation on institutional data before deployment
-
-**Clinical Deployment Requirements**:
-- Independent validation on local data
-- Human-in-the-loop verification
-- Conservative threshold setting
-- Continuous monitoring and auditing
-- Rollback procedures for model failures
-
-**Ethics**: This research aims to improve healthcare accessibility through efficient AI, but clinical deployment requires careful consideration of bias, fairness, and patient safety.
+---
