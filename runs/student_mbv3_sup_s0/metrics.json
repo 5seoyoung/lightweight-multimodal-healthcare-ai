@@ -1,0 +1,74 @@
+{
+  "exp_id": "student_mbv3_sup_s0",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "lr": 0.0003,
+  "backbone": "mobilenetv3_small_100",
+  "pretrained": true,
+  "augmentation": "light",
+  "use_pos_weight": false,
+  "seed": 0,
+  "device": "mps",
+  "env": {
+    "python": "3.13.5",
+    "torch": "2.8.0",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "selection_metric": "val_auprc",
+  "best_on_val": {
+    "loss": 0.1584132607501292,
+    "auroc": 0.7800909876823425,
+    "auprc": 0.16926336288452148,
+    "f1_macro": 0.0549887070060001,
+    "f1_macro_opt": 0.23604258495710403,
+    "thresholds": [
+      0.17000000178813934,
+      0.2800000011920929,
+      0.2800000011920929,
+      0.25,
+      0.23999999463558197,
+      0.11999999731779099,
+      0.05000000074505806,
+      0.11999999731779099,
+      0.17000000178813934,
+      0.12999999523162842,
+      0.10000000149011612,
+      0.029999999329447746,
+      0.10000000149011612,
+      0.009999999776482582
+    ],
+    "per_class_auc": [
+      0.7599581928702253,
+      0.8778387527704407,
+      0.8454104280130401,
+      0.6710063455635504,
+      0.7986839343024352,
+      0.62481015855164,
+      0.7316689477617911,
+      0.835917420320127,
+      0.79701060251493,
+      0.8952155368000726,
+      0.7759578708005281,
+      0.7250280412339669,
+      0.7623501766010324,
+      0.82041815587238
+    ]
+  },
+  "test": {
+    "loss": 0.16313722422267177,
+    "auroc": 0.7760531306266785,
+    "auprc": 0.16729627549648285,
+    "f1_macro": 0.22298229681084883
+  },
+  "artifacts": {
+    "runlog": "student_mbv3_sup_s0/run.log",
+    "thresholds": "student_mbv3_sup_s0/thresholds.json",
+    "checkpoint": "student_mbv3_sup_s0/ckpt.pt",
+    "test_json": "student_mbv3_sup_s0/test.json"
+  }
+}

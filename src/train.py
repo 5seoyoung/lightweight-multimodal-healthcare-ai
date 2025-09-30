@@ -340,6 +340,21 @@ def main():
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
+    # >>> auto patch: always save a checkpoint as best.pt
+    from pathlib import Path as _P
+    import torch as _T
+    _ckpt_dir = _P(args.outdir) / args.exp_name
+    _ckpt_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _state = model.state_dict()
+    except NameError:
+        try:
+            _state = net.state_dict()
+        except NameError:
+            _state = None
+    if _state is not None:
+        _T.save({'state_dict': _state, 'arch': args.backbone}, _ckpt_dir / 'best.pt')
+    # <<< end patch
     print("TEST:", json.dumps(test_metrics, ensure_ascii=False, indent=2))
 
 

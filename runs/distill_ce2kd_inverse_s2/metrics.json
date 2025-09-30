@@ -1,0 +1,71 @@
+{
+  "exp_id": "distill_ce2kd_inverse_s2",
+  "dataset": "chestmnist",
+  "task": "multi-label",
+  "n_classes": 14,
+  "img_size": 128,
+  "batch_size": 64,
+  "epochs": 12,
+  "augmentation": "light",
+  "teacher_backbone": "resnet18",
+  "student_backbone": "mobilenetv3_small_100",
+  "teacher_ckpt_used": false,
+  "sched": "ce2kd",
+  "alpha_min": 0.1,
+  "alpha_max": 0.7,
+  "tau_min": 2.0,
+  "tau_max": 5.0,
+  "cw_kd": "inverse",
+  "cw_beta": 0.99,
+  "feat": "none",
+  "lambda_feat": 0.0,
+  "optimizer": "AdamW",
+  "lr": 0.0003,
+  "eta_min": 1e-06,
+  "selection_metric": "auprc",
+  "early_patience": 3,
+  "amp": false,
+  "seed": 2,
+  "device": "mps",
+  "env": {
+    "python": "3.13.5",
+    "torch": "2.8.0",
+    "cuda_available": false,
+    "mps_available": true
+  },
+  "best_on_val": {
+    "loss": 0.5484723579927141,
+    "auroc": 0.775509238243103,
+    "auprc": 0.16766364872455597,
+    "f1_macro": 0.18499711221855117,
+    "f1_macro_opt": 0.23793681851715226,
+    "thresholds": [
+      0.6000000238418579,
+      0.8899999856948853,
+      0.7599999904632568,
+      0.4699999988079071,
+      0.800000011920929,
+      0.6399999856948853,
+      0.699999988079071,
+      0.6800000071525574,
+      0.7900000214576721,
+      0.8399999737739563,
+      0.7699999809265137,
+      0.8100000023841858,
+      0.7300000190734863,
+      0.6200000047683716
+    ]
+  },
+  "test": {
+    "loss": 0.5518259788300283,
+    "auroc": 0.774140477180481,
+    "auprc": 0.16683943569660187,
+    "f1_macro": 0.22699352019923408
+  },
+  "artifacts": {
+    "runlog": "distill_ce2kd_inverse_s2/run.log",
+    "thresholds": "distill_ce2kd_inverse_s2/thresholds.json",
+    "checkpoint": "distill_ce2kd_inverse_s2/ckpt.pt",
+    "test_json": "distill_ce2kd_inverse_s2/test.json"
+  }
+}
