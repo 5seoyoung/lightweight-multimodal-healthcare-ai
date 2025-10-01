@@ -1,5 +1,5 @@
 Method,Pretrained,Schedule/Weight,AUROC,AUPRC,F1_macro,ECE
 ,,,,,,
-KD: CE→KD + Inverse,✓,ce2kd/inverse,0.7737 ± 0.0022,0.1660 ± 0.0016,0.2249 ± 0.0038,nan ± 0.0000
+KD: CE→KD + Inverse,✓,ce2kd/inverse,0.7669 ± 0.0139,0.1640 ± 0.0011,0.2235 ± 0.0044,nan ± 0.0000
 Student MobileNetV3,✓,–,0.7796 ± 0.0031,0.1711 ± 0.0038,0.2285 ± 0.0071,nan ± 0.0000
 Teacher ResNet-18,✗,–,0.7667 ± 0.0002,0.1583 ± 0.0010,0.2120 ± 0.0007,nan ± 0.0000
